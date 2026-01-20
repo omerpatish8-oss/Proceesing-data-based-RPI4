@@ -159,7 +159,7 @@ def record_data(port):
                 # ═══════════════════════════════════
                 # New cycle detection (FIXED!)
                 # ═══════════════════════════════════
-                if "CYCLE" in line and recording:
+                if "CYCLE," in line and recording:
                     try:
                         cycle_num = int(line.split(',')[1])
                     except:
