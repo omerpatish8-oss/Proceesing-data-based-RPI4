@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Tremor Analysis Tool - Optimized for Motor-Holding Test Scenario
-Analyzes rest tremor (PD) vs essential tremor (postural) from accelerometer data
-Patient seated, holding rotating motor - gyroscope contaminated by motor rotation
+Tremor Analysis Tool - Educational Layout with Filter Verification
+Shows complete signal processing chain: Filter design → Application → Results
+Focuses on Y-axis (strongest tremor) with Bode plots and residual analysis
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import numpy as np
-from scipy.signal import butter, filtfilt, welch, hilbert
+from scipy.signal import butter, filtfilt, welch, hilbert, freqz
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.gridspec import GridSpec
 import mplcursors
 
 # ==========================================
@@ -30,21 +31,20 @@ WINDOW_SEC = 4          # Welch window size (seconds)
 PSD_OVERLAP = 0.5       # 50% overlap
 
 # Tremor detection thresholds
-TREMOR_POWER_THRESHOLD = 0.01  # Minimum power to detect tremor
-CLASSIFICATION_RATIO = 2.0      # Power ratio for tremor type classification
+TREMOR_POWER_THRESHOLD = 0.01
+CLASSIFICATION_RATIO = 2.0
 
 # Visual styling
-COL_REST = '#DC143C'        # Crimson - Rest tremor (PD)
+COL_REST = '#DC143C'        # Crimson - Rest tremor
 COL_ESSENTIAL = '#4169E1'   # Royal Blue - Essential tremor
-COL_MIXED = '#9370DB'       # Medium Purple - Mixed
-COL_ACCEL_X = '#FF6347'     # Tomato
-COL_ACCEL_Y = '#32CD32'     # Lime Green
-COL_ACCEL_Z = '#1E90FF'     # Dodger Blue
+COL_RAW = '#2F4F4F'         # Dark Slate Gray - Raw signal
+COL_FILTERED = '#FF6347'    # Tomato - Filtered signal
+COL_RESIDUAL = '#9370DB'    # Medium Purple - Residual
 
-class TremorAnalyzerMotor:
+class TremorAnalyzerEducational:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tremor Analyzer - Motor Test Optimized (Rest vs Essential)")
+        self.root.title("Tremor Analyzer - Educational (Filter Verification + Signal Analysis)")
         self.root.geometry("1600x1000")
 
         # Data storage
@@ -99,34 +99,34 @@ class TremorAnalyzerMotor:
         self.lbl_confidence.pack()
 
     def create_analysis_dashboard(self):
-        """Create comprehensive analysis dashboard"""
+        """Create educational analysis dashboard"""
         # Main canvas frame
         canvas_frame = ttk.Frame(self.root)
         canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create figure with subplots
+        # Create figure with custom layout
         self.fig = plt.figure(figsize=(16, 10))
-        gs = self.fig.add_gridspec(4, 3, hspace=0.35, wspace=0.3)
+        gs = GridSpec(4, 3, figure=self.fig, hspace=0.4, wspace=0.3)
 
-        # Row 1: Raw accelerometer axes (X, Y, Z)
-        self.ax_raw_x = self.fig.add_subplot(gs[0, 0])
-        self.ax_raw_y = self.fig.add_subplot(gs[0, 1])
-        self.ax_raw_z = self.fig.add_subplot(gs[0, 2])
+        # Row 1: FILTER DESIGN VERIFICATION
+        self.ax_bode_mag = self.fig.add_subplot(gs[0, 0])
+        self.ax_bode_phase = self.fig.add_subplot(gs[0, 1])
+        self.ax_psd_comparison = self.fig.add_subplot(gs[0, 2])
 
-        # Row 2: Filtered tremor signals (Rest band 3-6 Hz)
-        self.ax_rest_x = self.fig.add_subplot(gs[1, 0])
-        self.ax_rest_y = self.fig.add_subplot(gs[1, 1])
-        self.ax_rest_z = self.fig.add_subplot(gs[1, 2])
+        # Row 2: Y-AXIS TIME DOMAIN ANALYSIS
+        self.ax_raw = self.fig.add_subplot(gs[1, 0])
+        self.ax_filtered = self.fig.add_subplot(gs[1, 1])
+        self.ax_residual = self.fig.add_subplot(gs[1, 2])
 
-        # Row 3: Filtered tremor signals (Essential band 6-12 Hz)
-        self.ax_ess_x = self.fig.add_subplot(gs[2, 0])
-        self.ax_ess_y = self.fig.add_subplot(gs[2, 1])
-        self.ax_ess_z = self.fig.add_subplot(gs[2, 2])
+        # Row 3: FREQUENCY DOMAIN ANALYSIS
+        self.ax_psd_raw = self.fig.add_subplot(gs[2, 0])
+        self.ax_psd_filtered = self.fig.add_subplot(gs[2, 1])
+        self.ax_psd_residual = self.fig.add_subplot(gs[2, 2])
 
-        # Row 4: PSD analysis and summary
-        self.ax_psd_x = self.fig.add_subplot(gs[3, 0])
-        self.ax_psd_y = self.fig.add_subplot(gs[3, 1])
-        self.ax_psd_z = self.fig.add_subplot(gs[3, 2])
+        # Row 4: CLINICAL ANALYSIS
+        self.ax_spectrogram = self.fig.add_subplot(gs[3, 0])
+        self.ax_envelope = self.fig.add_subplot(gs[3, 1])
+        self.ax_metrics = self.fig.add_subplot(gs[3, 2])
 
         # Canvas
         self.canvas = FigureCanvasTkAgg(self.fig, master=canvas_frame)
@@ -143,10 +143,10 @@ class TremorAnalyzerMotor:
 
     def clear_all_plots(self):
         """Clear all plots and show instructions"""
-        for ax in [self.ax_raw_x, self.ax_raw_y, self.ax_raw_z,
-                   self.ax_rest_x, self.ax_rest_y, self.ax_rest_z,
-                   self.ax_ess_x, self.ax_ess_y, self.ax_ess_z,
-                   self.ax_psd_x, self.ax_psd_y, self.ax_psd_z]:
+        for ax in [self.ax_bode_mag, self.ax_bode_phase, self.ax_psd_comparison,
+                   self.ax_raw, self.ax_filtered, self.ax_residual,
+                   self.ax_psd_raw, self.ax_psd_filtered, self.ax_psd_residual,
+                   self.ax_spectrogram, self.ax_envelope, self.ax_metrics]:
             ax.clear()
             ax.text(0.5, 0.5, 'Load CSV data to begin analysis',
                    ha='center', va='center', transform=ax.transAxes,
@@ -229,22 +229,24 @@ class TremorAnalyzerMotor:
         return data
 
     def process_tremor_analysis(self):
-        """Main tremor analysis pipeline"""
-        # Extract accelerometer data
-        ax = self.data['Ax']
+        """Main tremor analysis pipeline - Educational approach"""
+
+        # Focus on Y-axis (strongest tremor based on test results)
         ay = self.data['Ay']
-        az = self.data['Az']
         t = self.data['Timestamp'] / 1000.0  # Convert to seconds
 
-        # Step 1: Remove DC offset (gravity + bias)
-        ax_clean = ax - np.mean(ax)
+        # Remove DC offset (gravity + bias)
         ay_clean = ay - np.mean(ay)
-        az_clean = az - np.mean(az)
 
-        # Step 2: Create filters
+        # Create filters
         nyquist = 0.5 * FS
 
-        # Rest tremor filter (3-6 Hz - Parkinson's)
+        # Combined tremor filter (3-12 Hz) for main analysis
+        b_tremor, a_tremor = butter(FILTER_ORDER,
+                                    [FREQ_REST_LOW/nyquist, FREQ_ESSENTIAL_HIGH/nyquist],
+                                    btype='band')
+
+        # Rest tremor filter (3-6 Hz)
         b_rest, a_rest = butter(FILTER_ORDER,
                                 [FREQ_REST_LOW/nyquist, FREQ_REST_HIGH/nyquist],
                                 btype='band')
@@ -254,260 +256,329 @@ class TremorAnalyzerMotor:
                               [FREQ_ESSENTIAL_LOW/nyquist, FREQ_ESSENTIAL_HIGH/nyquist],
                               btype='band')
 
-        # Step 3: Apply filters to each axis
-        # Rest tremor band (3-6 Hz)
-        rest_x = filtfilt(b_rest, a_rest, ax_clean)
+        # Apply main tremor filter
+        ay_filtered = filtfilt(b_tremor, a_tremor, ay_clean)
+
+        # Calculate residual (what was filtered OUT)
+        ay_residual = ay_clean - ay_filtered
+
+        # Apply band-specific filters for classification
         rest_y = filtfilt(b_rest, a_rest, ay_clean)
-        rest_z = filtfilt(b_rest, a_rest, az_clean)
-
-        # Essential tremor band (6-12 Hz)
-        ess_x = filtfilt(b_ess, a_ess, ax_clean)
         ess_y = filtfilt(b_ess, a_ess, ay_clean)
-        ess_z = filtfilt(b_ess, a_ess, az_clean)
 
-        # Step 4: Calculate PSDs
-        psd_data = {}
-        for axis_name, signal in [('X', ax_clean), ('Y', ay_clean), ('Z', az_clean)]:
-            nperseg = min(len(signal), int(FS * WINDOW_SEC))
-            noverlap = int(nperseg * PSD_OVERLAP)
-            f, psd = welch(signal, FS, nperseg=nperseg, noverlap=noverlap)
-            psd_data[axis_name] = {'freq': f, 'psd': psd}
+        # Calculate PSDs
+        nperseg = min(len(ay_clean), int(FS * WINDOW_SEC))
+        noverlap = int(nperseg * PSD_OVERLAP)
 
-        # Step 5: Analyze tremor characteristics
-        tremor_metrics = self.analyze_tremor_metrics(
-            rest_x, rest_y, rest_z,
-            ess_x, ess_y, ess_z,
-            psd_data
+        f_raw, psd_raw = welch(ay_clean, FS, nperseg=nperseg, noverlap=noverlap)
+        f_filt, psd_filt = welch(ay_filtered, FS, nperseg=nperseg, noverlap=noverlap)
+        f_resid, psd_resid = welch(ay_residual, FS, nperseg=nperseg, noverlap=noverlap)
+
+        # Calculate metrics
+        metrics = self.calculate_metrics(ay_clean, ay_filtered, rest_y, ess_y,
+                                        f_raw, psd_raw)
+
+        # Visualize everything
+        self.plot_educational_analysis(
+            t, ay_clean, ay_filtered, ay_residual,
+            rest_y, ess_y,
+            f_raw, psd_raw, f_filt, psd_filt, f_resid, psd_resid,
+            b_tremor, a_tremor, b_rest, a_rest, b_ess, a_ess,
+            metrics
         )
 
-        # Step 6: Visualize results
-        self.plot_analysis(
-            t, ax, ay, az,
-            rest_x, rest_y, rest_z,
-            ess_x, ess_y, ess_z,
-            psd_data,
-            tremor_metrics
-        )
-
-    def analyze_tremor_metrics(self, rest_x, rest_y, rest_z,
-                                ess_x, ess_y, ess_z, psd_data):
-        """Calculate tremor quantification metrics"""
+    def calculate_metrics(self, raw, filtered, rest, ess, freq, psd):
+        """Calculate tremor metrics"""
         metrics = {}
 
-        # Calculate RMS amplitude for each axis and band
-        metrics['rest_rms'] = {
-            'X': np.sqrt(np.mean(rest_x**2)),
-            'Y': np.sqrt(np.mean(rest_y**2)),
-            'Z': np.sqrt(np.mean(rest_z**2))
-        }
+        # RMS amplitudes
+        metrics['rms_raw'] = np.sqrt(np.mean(raw**2))
+        metrics['rms_filtered'] = np.sqrt(np.mean(filtered**2))
+        metrics['rms_rest'] = np.sqrt(np.mean(rest**2))
+        metrics['rms_ess'] = np.sqrt(np.mean(ess**2))
 
-        metrics['ess_rms'] = {
-            'X': np.sqrt(np.mean(ess_x**2)),
-            'Y': np.sqrt(np.mean(ess_y**2)),
-            'Z': np.sqrt(np.mean(ess_z**2))
-        }
+        # Powers
+        metrics['power_rest'] = metrics['rms_rest']
+        metrics['power_ess'] = metrics['rms_ess']
 
-        # Calculate total power in each band
-        metrics['rest_power_total'] = sum(metrics['rest_rms'].values())
-        metrics['ess_power_total'] = sum(metrics['ess_rms'].values())
+        # Dominant frequency
+        tremor_mask = (freq >= 3) & (freq <= 12)
+        if np.sum(tremor_mask) > 0:
+            peak_idx = np.argmax(psd[tremor_mask])
+            metrics['dominant_freq'] = freq[tremor_mask][peak_idx]
+            metrics['peak_power'] = psd[tremor_mask][peak_idx]
+        else:
+            metrics['dominant_freq'] = 0
+            metrics['peak_power'] = 0
 
-        # Find dominant frequency per axis from PSD
-        metrics['dominant_freq'] = {}
-        metrics['peak_power'] = {}
+        # Classification
+        power_ratio = metrics['power_rest'] / (metrics['power_ess'] + 1e-10)
 
-        for axis in ['X', 'Y', 'Z']:
-            f = psd_data[axis]['freq']
-            psd = psd_data[axis]['psd']
-
-            # Limit to tremor range (3-12 Hz)
-            tremor_mask = (f >= 3) & (f <= 12)
-            f_tremor = f[tremor_mask]
-            psd_tremor = psd[tremor_mask]
-
-            if len(psd_tremor) > 0:
-                peak_idx = np.argmax(psd_tremor)
-                metrics['dominant_freq'][axis] = f_tremor[peak_idx]
-                metrics['peak_power'][axis] = psd_tremor[peak_idx]
-            else:
-                metrics['dominant_freq'][axis] = 0
-                metrics['peak_power'][axis] = 0
-
-        # Calculate power in specific frequency bands from PSD
-        for axis in ['X', 'Y', 'Z']:
-            f = psd_data[axis]['freq']
-            psd = psd_data[axis]['psd']
-
-            # Rest tremor power (3-6 Hz)
-            rest_mask = (f >= FREQ_REST_LOW) & (f <= FREQ_REST_HIGH)
-            metrics['rest_rms'][f'{axis}_psd_power'] = np.sum(psd[rest_mask])
-
-            # Essential tremor power (6-12 Hz)
-            ess_mask = (f >= FREQ_ESSENTIAL_LOW) & (f <= FREQ_ESSENTIAL_HIGH)
-            metrics['ess_rms'][f'{axis}_psd_power'] = np.sum(psd[ess_mask])
-
-        # Classify tremor type based on power ratio
-        power_ratio = metrics['rest_power_total'] / (metrics['ess_power_total'] + 1e-10)
-
-        if metrics['rest_power_total'] < TREMOR_POWER_THRESHOLD and \
-           metrics['ess_power_total'] < TREMOR_POWER_THRESHOLD:
-            metrics['tremor_type'] = "No significant tremor detected"
+        if metrics['power_rest'] < TREMOR_POWER_THRESHOLD and \
+           metrics['power_ess'] < TREMOR_POWER_THRESHOLD:
+            metrics['tremor_type'] = "No significant tremor"
             metrics['confidence'] = "N/A"
+            metrics['color'] = 'gray'
         elif power_ratio > CLASSIFICATION_RATIO:
             metrics['tremor_type'] = "Rest Tremor (Parkinsonian)"
             metrics['confidence'] = f"High (ratio: {power_ratio:.2f})"
+            metrics['color'] = COL_REST
         elif power_ratio < 1/CLASSIFICATION_RATIO:
             metrics['tremor_type'] = "Essential Tremor (Postural)"
             metrics['confidence'] = f"High (ratio: {power_ratio:.2f})"
+            metrics['color'] = COL_ESSENTIAL
         else:
             metrics['tremor_type'] = "Mixed Tremor"
             metrics['confidence'] = f"Moderate (ratio: {power_ratio:.2f})"
+            metrics['color'] = COL_REST
 
         # Update UI
-        self.lbl_tremor_type.config(text=f"Type: {metrics['tremor_type']}")
+        self.lbl_tremor_type.config(text=f"Type: {metrics['tremor_type']}",
+                                   foreground=metrics['color'])
         self.lbl_confidence.config(text=f"Confidence: {metrics['confidence']}")
-
-        # Color-code tremor type
-        if "Rest" in metrics['tremor_type']:
-            self.lbl_tremor_type.config(foreground=COL_REST)
-        elif "Essential" in metrics['tremor_type']:
-            self.lbl_tremor_type.config(foreground=COL_ESSENTIAL)
-        elif "Mixed" in metrics['tremor_type']:
-            self.lbl_tremor_type.config(foreground=COL_MIXED)
-        else:
-            self.lbl_tremor_type.config(foreground="gray")
 
         return metrics
 
-    def plot_analysis(self, t, ax, ay, az,
-                     rest_x, rest_y, rest_z,
-                     ess_x, ess_y, ess_z,
-                     psd_data, metrics):
-        """Plot comprehensive analysis results"""
+    def plot_educational_analysis(self, t, raw, filtered, residual,
+                                  rest, ess,
+                                  f_raw, psd_raw, f_filt, psd_filt, f_resid, psd_resid,
+                                  b_tremor, a_tremor, b_rest, a_rest, b_ess, a_ess,
+                                  metrics):
+        """Plot educational analysis with filter verification"""
 
-        # Row 1: Raw accelerometer signals
-        for ax_plot, signal, title, color in [
-            (self.ax_raw_x, ax, 'X-axis (Lateral)', COL_ACCEL_X),
-            (self.ax_raw_y, ay, 'Y-axis (Anterior-Posterior)', COL_ACCEL_Y),
-            (self.ax_raw_z, az, 'Z-axis (Vertical)', COL_ACCEL_Z)
-        ]:
-            ax_plot.clear()
-            ax_plot.plot(t, signal, color=color, linewidth=0.8, alpha=0.7)
-            ax_plot.set_title(f'Raw Accelerometer - {title}', fontweight='bold')
-            ax_plot.set_ylabel('Accel (m/s²)')
-            ax_plot.grid(True, alpha=0.3)
-            ax_plot.margins(x=0)
+        # ============================================================
+        # ROW 1: FILTER DESIGN VERIFICATION
+        # ============================================================
 
-        # Row 2: Rest tremor band (3-6 Hz)
-        for ax_plot, signal, axis_name, color in [
-            (self.ax_rest_x, rest_x, 'X', COL_ACCEL_X),
-            (self.ax_rest_y, rest_y, 'Y', COL_ACCEL_Y),
-            (self.ax_rest_z, rest_z, 'Z', COL_ACCEL_Z)
-        ]:
-            ax_plot.clear()
-            ax_plot.plot(t, signal, color=color, linewidth=1.2)
-            rms = metrics['rest_rms'][axis_name]
-            ax_plot.set_title(f'Rest Tremor (3-6 Hz) - {axis_name} | RMS: {rms:.4f} m/s²',
-                            fontweight='bold')
-            ax_plot.set_ylabel('Filtered (m/s²)')
-            ax_plot.grid(True, alpha=0.3)
-            ax_plot.margins(x=0)
+        # Bode Magnitude Plot
+        self.ax_bode_mag.clear()
 
-            # Add envelope
-            envelope = np.abs(hilbert(signal))
-            ax_plot.plot(t, envelope, '--', color=color, alpha=0.4, linewidth=0.8)
-            ax_plot.plot(t, -envelope, '--', color=color, alpha=0.4, linewidth=0.8)
+        # Calculate frequency responses
+        w, h_tremor = freqz(b_tremor, a_tremor, worN=4096, fs=FS)
+        _, h_rest = freqz(b_rest, a_rest, worN=4096, fs=FS)
+        _, h_ess = freqz(b_ess, a_ess, worN=4096, fs=FS)
 
-        # Row 3: Essential tremor band (6-12 Hz)
-        for ax_plot, signal, axis_name, color in [
-            (self.ax_ess_x, ess_x, 'X', COL_ACCEL_X),
-            (self.ax_ess_y, ess_y, 'Y', COL_ACCEL_Y),
-            (self.ax_ess_z, ess_z, 'Z', COL_ACCEL_Z)
-        ]:
-            ax_plot.clear()
-            ax_plot.plot(t, signal, color=color, linewidth=1.2)
-            rms = metrics['ess_rms'][axis_name]
-            ax_plot.set_title(f'Essential Tremor (6-12 Hz) - {axis_name} | RMS: {rms:.4f} m/s²',
-                            fontweight='bold')
-            ax_plot.set_ylabel('Filtered (m/s²)')
-            ax_plot.set_xlabel('Time (s)')
-            ax_plot.grid(True, alpha=0.3)
-            ax_plot.margins(x=0)
+        # Plot magnitude responses
+        self.ax_bode_mag.plot(w, 20*np.log10(abs(h_tremor)), color='purple',
+                             linewidth=2, label='Combined (3-12 Hz)')
+        self.ax_bode_mag.plot(w, 20*np.log10(abs(h_rest)), color=COL_REST,
+                             linewidth=1.5, linestyle='--', label='Rest (3-6 Hz)')
+        self.ax_bode_mag.plot(w, 20*np.log10(abs(h_ess)), color=COL_ESSENTIAL,
+                             linewidth=1.5, linestyle='--', label='Essential (6-12 Hz)')
 
-            # Add envelope
-            envelope = np.abs(hilbert(signal))
-            ax_plot.plot(t, envelope, '--', color=color, alpha=0.4, linewidth=0.8)
-            ax_plot.plot(t, -envelope, '--', color=color, alpha=0.4, linewidth=0.8)
+        # Mark cutoff frequencies
+        self.ax_bode_mag.axvline(FREQ_REST_LOW, color='red', linestyle=':', alpha=0.5)
+        self.ax_bode_mag.axvline(FREQ_REST_HIGH, color='red', linestyle=':', alpha=0.5)
+        self.ax_bode_mag.axvline(FREQ_ESSENTIAL_HIGH, color='blue', linestyle=':', alpha=0.5)
 
-        # Row 4: PSD analysis
-        for ax_plot, axis_name, color in [
-            (self.ax_psd_x, 'X', COL_ACCEL_X),
-            (self.ax_psd_y, 'Y', COL_ACCEL_Y),
-            (self.ax_psd_z, 'Z', COL_ACCEL_Z)
-        ]:
-            ax_plot.clear()
+        self.ax_bode_mag.set_title('Filter Magnitude Response (Bode Plot)', fontweight='bold')
+        self.ax_bode_mag.set_xlabel('Frequency (Hz)')
+        self.ax_bode_mag.set_ylabel('Magnitude (dB)')
+        self.ax_bode_mag.set_xlim(0, 20)
+        self.ax_bode_mag.set_ylim(-60, 5)
+        self.ax_bode_mag.grid(True, alpha=0.3)
+        self.ax_bode_mag.legend(fontsize=8)
 
-            f = psd_data[axis_name]['freq']
-            psd = psd_data[axis_name]['psd']
-            psd_db = 10 * np.log10(psd + 1e-12)
+        # Bode Phase Plot
+        self.ax_bode_phase.clear()
+        self.ax_bode_phase.plot(w, np.unwrap(np.angle(h_tremor)) * 180/np.pi,
+                               color='purple', linewidth=2, label='Combined (3-12 Hz)')
+        self.ax_bode_phase.plot(w, np.unwrap(np.angle(h_rest)) * 180/np.pi,
+                               color=COL_REST, linewidth=1.5, linestyle='--', label='Rest (3-6 Hz)')
 
-            # Plot PSD
-            ax_plot.plot(f, psd_db, color='black', linewidth=1.2)
+        self.ax_bode_phase.axvline(FREQ_REST_LOW, color='red', linestyle=':', alpha=0.5)
+        self.ax_bode_phase.axvline(FREQ_REST_HIGH, color='red', linestyle=':', alpha=0.5)
+        self.ax_bode_phase.axvline(FREQ_ESSENTIAL_HIGH, color='blue', linestyle=':', alpha=0.5)
 
-            # Highlight tremor bands
-            ax_plot.fill_between(f, psd_db,
-                                where=((f >= FREQ_REST_LOW) & (f <= FREQ_REST_HIGH)),
-                                color=COL_REST, alpha=0.3, label='Rest (3-6 Hz)')
-            ax_plot.fill_between(f, psd_db,
-                                where=((f >= FREQ_ESSENTIAL_LOW) & (f <= FREQ_ESSENTIAL_HIGH)),
-                                color=COL_ESSENTIAL, alpha=0.3, label='Essential (6-12 Hz)')
+        self.ax_bode_phase.set_title('Filter Phase Response', fontweight='bold')
+        self.ax_bode_phase.set_xlabel('Frequency (Hz)')
+        self.ax_bode_phase.set_ylabel('Phase (degrees)')
+        self.ax_bode_phase.set_xlim(0, 20)
+        self.ax_bode_phase.grid(True, alpha=0.3)
+        self.ax_bode_phase.legend(fontsize=8)
 
-            # Mark dominant frequency
-            dom_freq = metrics['dominant_freq'][axis_name]
-            if dom_freq > 0:
-                dom_psd = 10 * np.log10(metrics['peak_power'][axis_name] + 1e-12)
-                ax_plot.plot(dom_freq, dom_psd, 'o', color=color, markersize=8,
-                           label=f'Peak: {dom_freq:.2f} Hz')
+        # PSD Before/After Comparison
+        self.ax_psd_comparison.clear()
+        psd_raw_db = 10*np.log10(psd_raw + 1e-12)
+        psd_filt_db = 10*np.log10(psd_filt + 1e-12)
 
-            ax_plot.set_title(f'Power Spectral Density - {axis_name} axis',
-                            fontweight='bold')
-            ax_plot.set_ylabel('Power (dB)')
-            ax_plot.set_xlabel('Frequency (Hz)')
-            ax_plot.set_xlim(0, 15)
-            ax_plot.grid(True, alpha=0.3)
-            ax_plot.legend(loc='upper right', fontsize=8)
+        self.ax_psd_comparison.plot(f_raw, psd_raw_db, color=COL_RAW,
+                                   linewidth=1.5, label='Before filtering', alpha=0.7)
+        self.ax_psd_comparison.plot(f_filt, psd_filt_db, color=COL_FILTERED,
+                                   linewidth=2, label='After filtering (3-12 Hz)')
+
+        # Highlight tremor bands
+        self.ax_psd_comparison.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
+                                      color=COL_REST, alpha=0.2, label='Rest band')
+        self.ax_psd_comparison.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH,
+                                      color=COL_ESSENTIAL, alpha=0.2, label='Essential band')
+
+        self.ax_psd_comparison.set_title('PSD: Before vs After Filtering', fontweight='bold')
+        self.ax_psd_comparison.set_xlabel('Frequency (Hz)')
+        self.ax_psd_comparison.set_ylabel('Power (dB)')
+        self.ax_psd_comparison.set_xlim(0, 20)
+        self.ax_psd_comparison.grid(True, alpha=0.3)
+        self.ax_psd_comparison.legend(fontsize=7)
+
+        # ============================================================
+        # ROW 2: Y-AXIS TIME DOMAIN ANALYSIS
+        # ============================================================
+
+        # Raw signal
+        self.ax_raw.clear()
+        self.ax_raw.plot(t, raw, color=COL_RAW, linewidth=1, alpha=0.8)
+        self.ax_raw.set_title(f'Raw Y-axis Signal | RMS: {metrics["rms_raw"]:.4f} m/s²',
+                             fontweight='bold')
+        self.ax_raw.set_ylabel('Accel (m/s²)')
+        self.ax_raw.grid(True, alpha=0.3)
+        self.ax_raw.margins(x=0)
+
+        # Filtered signal (3-12 Hz)
+        self.ax_filtered.clear()
+        self.ax_filtered.plot(t, filtered, color=COL_FILTERED, linewidth=1.2)
+
+        # Add envelope
+        envelope = np.abs(hilbert(filtered))
+        self.ax_filtered.plot(t, envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+        self.ax_filtered.plot(t, -envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+
+        self.ax_filtered.set_title(f'Filtered Signal (3-12 Hz) | RMS: {metrics["rms_filtered"]:.4f} m/s²',
+                                  fontweight='bold')
+        self.ax_filtered.set_ylabel('Filtered (m/s²)')
+        self.ax_filtered.grid(True, alpha=0.3)
+        self.ax_filtered.margins(x=0)
+
+        # Residual (what was filtered OUT)
+        self.ax_residual.clear()
+        self.ax_residual.plot(t, residual, color=COL_RESIDUAL, linewidth=1)
+        rms_residual = np.sqrt(np.mean(residual**2))
+        self.ax_residual.set_title(f'Residual (Filtered OUT) | RMS: {rms_residual:.4f} m/s²',
+                                  fontweight='bold')
+        self.ax_residual.set_ylabel('Residual (m/s²)')
+        self.ax_residual.grid(True, alpha=0.3)
+        self.ax_residual.margins(x=0)
+
+        # ============================================================
+        # ROW 3: FREQUENCY DOMAIN ANALYSIS
+        # ============================================================
+
+        # PSD of raw signal
+        self.ax_psd_raw.clear()
+        self.ax_psd_raw.plot(f_raw, psd_raw_db, color=COL_RAW, linewidth=1.2)
+        self.ax_psd_raw.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH, color=COL_REST, alpha=0.2)
+        self.ax_psd_raw.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH, color=COL_ESSENTIAL, alpha=0.2)
+        self.ax_psd_raw.set_title('PSD: Raw Signal (All Frequencies)', fontweight='bold')
+        self.ax_psd_raw.set_ylabel('Power (dB)')
+        self.ax_psd_raw.set_xlim(0, 20)
+        self.ax_psd_raw.grid(True, alpha=0.3)
+
+        # PSD of filtered signal
+        self.ax_psd_filtered.clear()
+        self.ax_psd_filtered.plot(f_filt, psd_filt_db, color=COL_FILTERED, linewidth=1.2)
+        self.ax_psd_filtered.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH, color=COL_REST, alpha=0.2)
+        self.ax_psd_filtered.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH, color=COL_ESSENTIAL, alpha=0.2)
+
+        # Mark dominant frequency
+        if metrics['dominant_freq'] > 0:
+            dom_psd_db = 10*np.log10(metrics['peak_power'] + 1e-12)
+            self.ax_psd_filtered.plot(metrics['dominant_freq'], dom_psd_db, 'o',
+                                     color='red', markersize=8,
+                                     label=f'Peak: {metrics["dominant_freq"]:.2f} Hz')
+
+        self.ax_psd_filtered.set_title('PSD: Filtered Signal (3-12 Hz Only)', fontweight='bold')
+        self.ax_psd_filtered.set_ylabel('Power (dB)')
+        self.ax_psd_filtered.set_xlim(0, 20)
+        self.ax_psd_filtered.grid(True, alpha=0.3)
+        self.ax_psd_filtered.legend(fontsize=8)
+
+        # PSD of residual
+        self.ax_psd_residual.clear()
+        self.ax_psd_residual.plot(f_resid, 10*np.log10(psd_resid + 1e-12),
+                                 color=COL_RESIDUAL, linewidth=1.2)
+        self.ax_psd_residual.set_title('PSD: Residual (What Was Removed)', fontweight='bold')
+        self.ax_psd_residual.set_ylabel('Power (dB)')
+        self.ax_psd_residual.set_xlabel('Frequency (Hz)')
+        self.ax_psd_residual.set_xlim(0, 20)
+        self.ax_psd_residual.grid(True, alpha=0.3)
+
+        # ============================================================
+        # ROW 4: CLINICAL ANALYSIS
+        # ============================================================
+
+        # Spectrogram
+        self.ax_spectrogram.clear()
+        # Limit to first 30 seconds for clarity
+        nperseg_spec = int(FS * 2)  # 2-second windows
+        noverlap_spec = int(nperseg_spec * 0.9)  # 90% overlap
+
+        f_spec, t_spec, Sxx = self.ax_spectrogram.specgram(
+            filtered[:int(30*FS)], Fs=FS,
+            NFFT=nperseg_spec, noverlap=noverlap_spec,
+            cmap='jet'
+        )
+
+        self.ax_spectrogram.set_title('Spectrogram: Tremor Evolution (First 30s)', fontweight='bold')
+        self.ax_spectrogram.set_ylabel('Frequency (Hz)')
+        self.ax_spectrogram.set_xlabel('Time (s)')
+        self.ax_spectrogram.set_ylim(0, 15)
+
+        # Tremor envelope
+        self.ax_envelope.clear()
+        envelope = np.abs(hilbert(filtered))
+        self.ax_envelope.plot(t, envelope, color=COL_FILTERED, linewidth=1.5)
+        self.ax_envelope.fill_between(t, envelope, alpha=0.3, color=COL_FILTERED)
+        self.ax_envelope.set_title('Tremor Intensity Over Time (Envelope)', fontweight='bold')
+        self.ax_envelope.set_ylabel('Amplitude (m/s²)')
+        self.ax_envelope.set_xlabel('Time (s)')
+        self.ax_envelope.grid(True, alpha=0.3)
+        self.ax_envelope.margins(x=0)
+
+        # Metrics table
+        self.ax_metrics.clear()
+        self.ax_metrics.axis('off')
+
+        # Create metrics text
+        metrics_text = f"""
+TREMOR CLASSIFICATION
+{'─'*35}
+Type: {metrics['tremor_type']}
+Confidence: {metrics['confidence']}
+
+AMPLITUDE ANALYSIS
+{'─'*35}
+Raw Signal RMS:      {metrics['rms_raw']:.4f} m/s²
+Filtered RMS:        {metrics['rms_filtered']:.4f} m/s²
+Rest Tremor (3-6Hz): {metrics['rms_rest']:.4f} m/s²
+Essential (6-12Hz):  {metrics['rms_ess']:.4f} m/s²
+
+FREQUENCY ANALYSIS
+{'─'*35}
+Dominant Freq:       {metrics['dominant_freq']:.2f} Hz
+Peak Power:          {metrics['peak_power']:.6f}
+
+POWER RATIO
+{'─'*35}
+Rest / Essential:    {metrics['power_rest']/metrics['power_ess']:.2f}
+"""
+
+        self.ax_metrics.text(0.05, 0.95, metrics_text,
+                            transform=self.ax_metrics.transAxes,
+                            fontfamily='monospace', fontsize=9,
+                            verticalalignment='top')
+
+        self.ax_metrics.set_title('Clinical Metrics Summary', fontweight='bold', loc='left')
 
         self.canvas.draw()
 
-        # Print metrics to console
-        self.print_metrics(metrics)
-
-    def print_metrics(self, metrics):
-        """Print tremor metrics to console"""
+        # Print to console
         print("\n" + "="*70)
-        print("TREMOR ANALYSIS RESULTS")
+        print("TREMOR ANALYSIS RESULTS (Y-axis)")
         print("="*70)
-
-        print(f"\nTremor Classification: {metrics['tremor_type']}")
-        print(f"Confidence: {metrics['confidence']}")
-
-        print(f"\nRest Tremor Band (3-6 Hz) - RMS Amplitude:")
-        for axis in ['X', 'Y', 'Z']:
-            print(f"  {axis}-axis: {metrics['rest_rms'][axis]:.4f} m/s²")
-        print(f"  Total Power: {metrics['rest_power_total']:.4f}")
-
-        print(f"\nEssential Tremor Band (6-12 Hz) - RMS Amplitude:")
-        for axis in ['X', 'Y', 'Z']:
-            print(f"  {axis}-axis: {metrics['ess_rms'][axis]:.4f} m/s²")
-        print(f"  Total Power: {metrics['ess_power_total']:.4f}")
-
-        print(f"\nDominant Frequencies:")
-        for axis in ['X', 'Y', 'Z']:
-            print(f"  {axis}-axis: {metrics['dominant_freq'][axis]:.2f} Hz")
-
-        print("\n" + "="*70 + "\n")
+        print(metrics_text)
+        print("="*70 + "\n")
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = TremorAnalyzerMotor(root)
+    app = TremorAnalyzerEducational(root)
     root.mainloop()
