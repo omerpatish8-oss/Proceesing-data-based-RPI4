@@ -16,7 +16,7 @@ import mplcursors
 # ==========================================
 # CONFIGURATION PARAMETERS
 # ==========================================
-FS = 98.0               # Actual sampling rate (from validation)
+FS = 100.0              # Sampling rate (Hz)
 FILTER_ORDER = 4        # Butterworth filter order
 
 # Tremor frequency bands (research-based)
