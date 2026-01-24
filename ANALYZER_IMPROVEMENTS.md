@@ -47,12 +47,12 @@
 
 ### **Row 4: Power Spectral Density (PSD) Analysis**
 ```
-[PSD - Dominant Axis]  [PSD - All Axes]  [Band Power Comparison]
+[PSD - Dominant Axis]  [PSD - Resultant Vector]  [Band Power Comparison]
 ```
 - **Purpose:** Frequency domain analysis for tremor classification
 - **PSD plots:** Welch's method with tremor bands highlighted
-- **Multi-axis view:** Compare X, Y, Z frequency content
-- **Bar chart:** Rest (3-7 Hz) vs Essential (6-12 Hz) power comparison
+- **Resultant view:** PSD of resultant magnitude (raw vs filtered)
+- **Bar chart:** Rest (3-7 Hz) vs Essential (6-12 Hz) power comparison with units (m²/s⁴)
 
 ---
 
@@ -167,7 +167,7 @@ Mixed Tremor:
 - **Blue (Royal Blue):** Essential tremor band (6-12 Hz)
 - **Dark Gray:** Raw signals
 - **Tomato Red:** Filtered signals
-- **Axis colors:** X=Red, Y=Green, Z=Blue
+- **Axis colors:** X=Red, Y=Gray, Z=Blue
 
 ### **Plot Enhancements:**
 - Hilbert envelope on filtered signals (shows amplitude modulation)

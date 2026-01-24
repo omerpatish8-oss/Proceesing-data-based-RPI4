@@ -988,8 +988,8 @@ else:                    # Mixed pattern
 
 **Row 4: Power Spectral Density (PSD) Analysis**
 - PSD of dominant axis with tremor bands highlighted
-- PSD of all axes (X, Y, Z) comparison
-- Band power bar chart (Rest 3-7 Hz vs Essential 6-12 Hz)
+- PSD of resultant vector (raw vs filtered)
+- Band power bar chart with units (Rest 3-7 Hz vs Essential 6-12 Hz in m²/s⁴)
 
 #### Clinical Output Metrics
 

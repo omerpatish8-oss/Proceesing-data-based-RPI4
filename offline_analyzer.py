@@ -44,7 +44,7 @@ COL_ESSENTIAL = '#4169E1'   # Royal Blue - Essential tremor
 COL_RAW = '#2F4F4F'         # Dark Slate Gray - Raw signal
 COL_FILTERED = '#FF6347'    # Tomato - Filtered signal
 COL_X = '#E74C3C'           # Red - X axis
-COL_Y = '#2ECC71'           # Green - Y axis
+COL_Y = '#808080'           # Gray - Y axis
 COL_Z = '#3498DB'           # Blue - Z axis
 
 class TremorAnalyzerResearch:
@@ -314,7 +314,8 @@ class TremorAnalyzerResearch:
         f_z, psd_z = welch(az_clean, FS, nperseg=nperseg, noverlap=noverlap)
 
         # PSD for resultant
-        f_result, psd_result = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
+        f_result, psd_result_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_result_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
 
         # Calculate metrics
         metrics = self.calculate_metrics(
@@ -327,7 +328,7 @@ class TremorAnalyzerResearch:
             t, dominant_axis, axis_filtered, accel_mag, result_filtered,
             ax_clean, ay_clean, az_clean,
             f_axis, psd_axis_raw, psd_axis_filt,
-            f_x, psd_x, f_y, psd_y, f_z, psd_z,
+            f_result, psd_result_raw, psd_result_filt,
             b_tremor, a_tremor,
             metrics, max_axis, axis_color
         )
@@ -397,7 +398,7 @@ class TremorAnalyzerResearch:
 
     def plot_analysis(self, t, axis_raw, axis_filt, result_raw, result_filt,
                      ax, ay, az, f_axis, psd_axis_raw, psd_axis_filt,
-                     f_x, psd_x, f_y, psd_y, f_z, psd_z,
+                     f_result, psd_result_raw, psd_result_filt,
                      b_tremor, a_tremor, metrics, max_axis, axis_color):
         """Plot complete analysis"""
 
@@ -485,6 +486,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_axis_raw.set_title(f'{max_axis}-Axis (Highest Energy) - Raw | RMS: {np.sqrt(np.mean(axis_raw**2)):.4f} m/s²',
                                   fontweight='bold')
         self.ax_axis_raw.set_ylabel(f'{max_axis} (m/s²)')
+        self.ax_axis_raw.set_xlabel('Time (s)')
         self.ax_axis_raw.grid(True, alpha=0.3)
         self.ax_axis_raw.margins(x=0)
 
@@ -499,7 +501,8 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         self.ax_axis_filtered.set_title(f'{max_axis}-Axis Filtered (3-12 Hz) | RMS: {np.sqrt(np.mean(axis_filt**2)):.4f} m/s²',
                                        fontweight='bold')
-        self.ax_axis_filtered.set_ylabel(f'{max_axis} Filtered (m/s²)')
+        self.ax_axis_filtered.set_ylabel(f'{max_axis} (m/s²)')
+        self.ax_axis_filtered.set_xlabel('Time (s)')
         self.ax_axis_filtered.grid(True, alpha=0.3)
         self.ax_axis_filtered.margins(x=0)
 
@@ -512,6 +515,7 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         self.ax_axis_overlay.set_title(f'{max_axis}-Axis: Raw vs Filtered', fontweight='bold')
         self.ax_axis_overlay.set_ylabel(f'{max_axis} (m/s²)')
+        self.ax_axis_overlay.set_xlabel('Time (s)')
         self.ax_axis_overlay.grid(True, alpha=0.3)
         self.ax_axis_overlay.margins(x=0)
         self.ax_axis_overlay.legend(fontsize=8)
@@ -526,6 +530,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_result_raw.set_title(f'Resultant Vector (Raw) | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s²',
                                     fontweight='bold')
         self.ax_result_raw.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_raw.set_xlabel('Time (s)')
         self.ax_result_raw.grid(True, alpha=0.3)
         self.ax_result_raw.margins(x=0)
 
@@ -540,7 +545,8 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         self.ax_result_filtered.set_title(f'Resultant Filtered (3-12 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s²',
                                          fontweight='bold')
-        self.ax_result_filtered.set_ylabel('Filtered Magnitude (m/s²)')
+        self.ax_result_filtered.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_filtered.set_xlabel('Time (s)')
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
 
@@ -553,6 +559,7 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         self.ax_result_overlay.set_title('Resultant Vector: Raw vs Filtered', fontweight='bold')
         self.ax_result_overlay.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_overlay.set_xlabel('Time (s)')
         self.ax_result_overlay.grid(True, alpha=0.3)
         self.ax_result_overlay.margins(x=0)
         self.ax_result_overlay.legend(fontsize=8)
@@ -590,22 +597,22 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_psd_axis.grid(True, alpha=0.3)
         self.ax_psd_axis.legend(fontsize=7)
 
-        # PSD of all axes
+        # PSD of resultant vector
         self.ax_psd_all.clear()
-        psd_x_db = 10*np.log10(psd_x + 1e-12)
-        psd_y_db = 10*np.log10(psd_y + 1e-12)
-        psd_z_db = 10*np.log10(psd_z + 1e-12)
+        psd_result_raw_db = 10*np.log10(psd_result_raw + 1e-12)
+        psd_result_filt_db = 10*np.log10(psd_result_filt + 1e-12)
 
-        self.ax_psd_all.plot(f_x, psd_x_db, color=COL_X, linewidth=1.5, label='X-Axis', alpha=0.8)
-        self.ax_psd_all.plot(f_y, psd_y_db, color=COL_Y, linewidth=1.5, label='Y-Axis', alpha=0.8)
-        self.ax_psd_all.plot(f_z, psd_z_db, color=COL_Z, linewidth=1.5, label='Z-Axis', alpha=0.8)
+        self.ax_psd_all.plot(f_result, psd_result_raw_db, color=COL_RAW,
+                            linewidth=1, alpha=0.6, label='Raw')
+        self.ax_psd_all.plot(f_result, psd_result_filt_db, color=COL_FILTERED,
+                            linewidth=1.5, label='Filtered')
 
         self.ax_psd_all.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
-                               color=COL_REST, alpha=0.15, label='Rest')
+                               color=COL_REST, alpha=0.2, label='Rest (3-7 Hz)')
         self.ax_psd_all.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH,
-                               color=COL_ESSENTIAL, alpha=0.15, label='Essential')
+                               color=COL_ESSENTIAL, alpha=0.2, label='Essential (6-12 Hz)')
 
-        self.ax_psd_all.set_title('PSD - All Axes Comparison', fontweight='bold')
+        self.ax_psd_all.set_title('PSD - Resultant Vector', fontweight='bold')
         self.ax_psd_all.set_xlabel('Frequency (Hz)')
         self.ax_psd_all.set_ylabel('Power (dB)')
         self.ax_psd_all.set_xlim(0, 20)
@@ -628,7 +635,7 @@ Peak Power:        {metrics['peak_power']:.6f}
                               ha='center', va='bottom', fontsize=9)
 
         self.ax_bands.set_title('Tremor Band Power (Resultant)', fontweight='bold')
-        self.ax_bands.set_ylabel('Power')
+        self.ax_bands.set_ylabel('Power (m²/s⁴)')
         self.ax_bands.grid(True, alpha=0.3, axis='y')
 
         self.canvas.draw()

@@ -231,9 +231,9 @@ When viewing in GUI (`offline_analyzer.py`):
 
 **New Layout (v3.1):**
 1. **Row 1 (Filter + Metrics):** Bode plots + Clinical metrics table
-2. **Row 2 (Dominant Axis):** Y-axis raw, filtered, and overlay (auto-detected highest energy)
-3. **Row 3 (Resultant Vector):** Magnitude raw, filtered, and overlay
-4. **Row 4 (PSD Analysis):** Y-axis PSD, all axes comparison, band power bars
+2. **Row 2 (Dominant Axis):** Y-axis (gray) raw, filtered, and overlay with time/units labels
+3. **Row 3 (Resultant Vector):** Magnitude raw, filtered, and overlay with time/units labels
+4. **Row 4 (PSD Analysis):** Y-axis PSD, resultant vector PSD, band power bars (m²/s⁴)
 
 **Look for:**
 - **Row 1:** Filter response verification + tremor classification display
@@ -242,10 +242,11 @@ When viewing in GUI (`offline_analyzer.py`):
 - **Row 4:** Clear peaks at 5.5-5.75 Hz in PSD, rest band (red) > essential band (blue)
 
 **Key Observations:**
-- Dominant axis automatically identified as Y (anterior-posterior)
+- Dominant axis automatically identified as Y (gray color, anterior-posterior)
+- All time-domain plots include Time (s) and units (m/s²) on axes
 - Envelope plots show tremor intensity modulation
-- Multi-axis PSD comparison shows Y-axis dominance
-- Bar chart visualizes rest vs essential tremor power ratio
+- Resultant PSD shows overall magnitude frequency content
+- Bar chart shows power with proper units (m²/s⁴)
 
 ---
 
