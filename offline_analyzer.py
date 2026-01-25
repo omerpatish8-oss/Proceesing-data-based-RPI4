@@ -320,7 +320,7 @@ class TremorAnalyzerResearch:
         # Calculate metrics
         metrics = self.calculate_metrics(
             accel_mag, result_filtered, result_rest, result_ess,
-            f_result, psd_result_raw, max_axis, axis_color
+            f_result, psd_result_raw, max_axis, axis_color, axis_filtered
         )
 
         # Visualize everything
@@ -334,7 +334,7 @@ class TremorAnalyzerResearch:
         )
 
     def calculate_metrics(self, accel_raw, accel_filt, accel_rest, accel_ess,
-                          freq, psd, max_axis, axis_color):
+                          freq, psd, max_axis, axis_color, axis_filt):
         """Calculate tremor metrics"""
         metrics = {}
 
@@ -346,6 +346,9 @@ class TremorAnalyzerResearch:
         metrics['accel_mean'] = np.mean(accel_filt)
         metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))
         metrics['accel_max'] = np.max(np.abs(accel_filt))
+
+        # Dominant axis RMS (NEW!)
+        metrics['axis_rms'] = np.sqrt(np.mean(axis_filt**2))
 
         # Band-specific RMS
         metrics['rest_rms'] = np.sqrt(np.mean(accel_rest**2))
@@ -448,26 +451,27 @@ Confidence: {metrics['confidence']}
 ACCELEROMETER METRICS
 {'─'*35}
 Dominant Axis: {metrics['max_axis']}
-Mean Amplitude:    {metrics['accel_mean']:.4f} m/s²
-RMS:               {metrics['accel_rms']:.4f} m/s²
-Max Amplitude:     {metrics['accel_max']:.4f} m/s²
+Axis RMS ({metrics['max_axis']}):    {metrics['axis_rms']:.4f} m/s²
+Resultant RMS:      {metrics['accel_rms']:.4f} m/s²
+Mean Amplitude:     {metrics['accel_mean']:.4f} m/s²
+Max Amplitude:      {metrics['accel_max']:.4f} m/s²
 
 TREMOR BAND ANALYSIS
 {'─'*35}
 Rest (3-7 Hz):
-  RMS:             {metrics['rest_rms']:.4f} m/s²
-  Power:           {metrics['power_rest']:.6f}
+  RMS:              {metrics['rest_rms']:.4f} m/s²
+  Power:            {metrics['power_rest']:.6f}
 
 Essential (6-12 Hz):
-  RMS:             {metrics['ess_rms']:.4f} m/s²
-  Power:           {metrics['power_ess']:.6f}
+  RMS:              {metrics['ess_rms']:.4f} m/s²
+  Power:            {metrics['power_ess']:.6f}
 
-Power Ratio:       {metrics['power_rest']/(metrics['power_ess']+1e-10):.2f}
+Power Ratio:        {metrics['power_rest']/(metrics['power_ess']+1e-10):.2f}
 
 FREQUENCY
 {'─'*35}
-Dominant Freq:     {metrics['dominant_freq']:.2f} Hz
-Peak Power:        {metrics['peak_power']:.6f}
+Dominant Freq:      {metrics['dominant_freq']:.2f} Hz
+Peak Power:         {metrics['peak_power']:.6f}
 """
 
         self.ax_metrics.text(0.05, 0.95, metrics_text,
