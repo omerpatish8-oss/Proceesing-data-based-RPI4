@@ -933,10 +933,13 @@ The offline analyzer implements clinically-validated methods for Parkinson's dis
   - [MDPI - Sensors: ELENA Project with ESP32](https://www.mdpi.com/1424-8220/25/9/2763)
 
 **Signal Processing Approach:**
-- **Resultant Vector Analysis**: Analyzes magnitude `√(x² + y² + z²)` for both accelerometer and gyroscope
+- **Accelerometer Focus**: Gyroscope data excluded (motor artifact concerns in motor-holding tests)
+- **Dual Perspective**: Both dominant axis analysis AND resultant vector magnitude
+- **Automatic Axis Detection**: Identifies highest energy axis (X, Y, or Z) automatically
 - **Dual-Band Filtering**: Separates rest tremor (3-7 Hz) from essential tremor (6-12 Hz)
 - **Butterworth Order 4**: Research-validated filter design with zero-phase distortion
-- **Clinical Features**: Mean amplitude, RMS, maximum amplitude, spectral power
+- **Resultant Vector**: Magnitude `√(Ax² + Ay² + Az²)` after gravity removal
+- **Clinical Features**: Mean amplitude, RMS, maximum amplitude, spectral power per band
 
 #### Tremor Classification
 
@@ -966,27 +969,27 @@ else:                    # Mixed pattern
     confidence = "Moderate"
 ```
 
-#### Visualization Dashboard (12 Plots)
+#### Visualization Dashboard (4 Rows × 3 Columns)
 
-**Row 1: Filter Characteristics**
-- Bode magnitude response
+**Row 1: Filter Characteristics & Clinical Metrics**
+- Bode magnitude response (Butterworth order 4)
 - Bode phase response
-- Rest vs Essential filter comparison
+- Clinical metrics table (tremor type, confidence, RMS, power, frequency)
 
-**Row 2: Time-Domain Analysis**
-- Raw accelerometer resultant
-- Filtered tremor signal (3-12 Hz)
-- Before/After overlay comparison
+**Row 2: Dominant Axis Analysis (Auto-Detected)**
+- Highest energy axis - raw signal (e.g., Y-axis)
+- Filtered signal (3-12 Hz) with envelope
+- Raw vs Filtered overlay comparison
 
-**Row 3: Frequency-Domain Analysis**
-- Power Spectral Density (PSD) comparison
-- Tremor band power (bar chart)
-- Spectrogram (time-frequency analysis)
+**Row 3: Resultant Vector Analysis**
+- Raw resultant magnitude `√(Ax² + Ay² + Az²)`
+- Filtered resultant (3-12 Hz) with envelope
+- Raw vs Filtered overlay comparison
 
-**Row 4: Advanced Metrics**
-- Gyroscope analysis (⚠️ motor artifacts possible)
-- Gyroscope filtered signal
-- Clinical metrics table
+**Row 4: Power Spectral Density (PSD) Analysis**
+- PSD of dominant axis with tremor bands highlighted
+- PSD of resultant vector (raw vs filtered)
+- Band power bar chart with units (Rest 3-7 Hz vs Essential 6-12 Hz in m²/s⁴)
 
 #### Clinical Output Metrics
 
@@ -1011,12 +1014,13 @@ python3 offline_analyzer.py
 **Steps:**
 1. Click "📂 Load CSV Data"
 2. Select tremor CSV file
-3. View 12-plot dashboard with:
-   - Filter response analysis
-   - Raw vs filtered signals
-   - PSD with highlighted tremor bands
-   - Clinical metrics
-4. Check console for numerical results
+3. View 4×3 dashboard with:
+   - **Row 1:** Filter design + clinical metrics table
+   - **Row 2:** Dominant axis (auto-detected, e.g., Y-axis) raw/filtered/overlay
+   - **Row 3:** Resultant vector magnitude raw/filtered/overlay
+   - **Row 4:** PSD analysis (dominant axis, all axes, band power)
+4. Check top-right for tremor classification
+5. Check console for numerical results
 
 **Console Output Example:**
 ```

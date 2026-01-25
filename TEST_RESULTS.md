@@ -1,8 +1,8 @@
 # Tremor Analyzer Test Results
 
 **Date:** 2026-01-24
-**Analyzer:** offline_analyzer_motor_optimized.py
-**Test Script:** test_analyzer.py
+**Analyzer:** offline_analyzer.py (v3.1)
+**Design:** Accelerometer-focused with dominant axis + resultant vector
 **Sampling Rate:** 100 Hz
 
 ---
@@ -227,19 +227,26 @@
 
 ## 📊 Visualization Recommendations
 
-When viewing in GUI (`offline_analyzer_motor_optimized.py`):
+When viewing in GUI (`offline_analyzer.py`):
+
+**New Layout (v3.1):**
+1. **Row 1 (Filter + Metrics):** Bode plots + Clinical metrics table
+2. **Row 2 (Dominant Axis):** Y-axis (gray) raw, filtered, and overlay with time/units labels
+3. **Row 3 (Resultant Vector):** Magnitude raw, filtered, and overlay with time/units labels
+4. **Row 4 (PSD Analysis):** Y-axis PSD, resultant vector PSD, band power bars (m²/s⁴)
 
 **Look for:**
-1. **Row 1 (Raw signals):** Should see oscillations at ~5-6 Hz
-2. **Row 2 (Rest tremor 3-6 Hz):** Strong signals, especially Y-axis
-3. **Row 3 (Essential 6-12 Hz):** Lower amplitude than Row 2
-4. **Row 4 (PSD):** Clear peaks at 5.5-5.75 Hz with red band highlighting
+- **Row 1:** Filter response verification + tremor classification display
+- **Row 2:** Y-axis (dominant) showing strong 5-6 Hz oscillations with envelope
+- **Row 3:** Resultant vector showing overall tremor magnitude
+- **Row 4:** Clear peaks at 5.5-5.75 Hz in PSD, rest band (red) > essential band (blue)
 
 **Key Observations:**
-- Envelope plots show tremor intensity over time
-- PSD clearly shows rest band dominance (red > blue)
-- Y-axis plots should show largest amplitudes
-- Dominant frequency markers at 5.5-5.75 Hz
+- Dominant axis automatically identified as Y (gray color, anterior-posterior)
+- All time-domain plots include Time (s) and units (m/s²) on axes
+- Envelope plots show tremor intensity modulation
+- Resultant PSD shows overall magnitude frequency content
+- Bar chart shows power with proper units (m²/s⁴)
 
 ---
 
@@ -247,14 +254,15 @@ When viewing in GUI (`offline_analyzer_motor_optimized.py`):
 
 ### For Testing:
 ```bash
-# Run GUI analyzer
-python3 offline_analyzer_motor_optimized.py
-# Load either CSV file
-# Observe 12-plot dashboard
-
-# Or run headless test
-python3 test_analyzer.py
-# See console output for both files
+# Run GUI analyzer (v3.1)
+python3 offline_analyzer.py
+# Click "Load CSV Data"
+# Select either CSV file
+# View 4×3 dashboard:
+#   - Row 1: Filter design + metrics
+#   - Row 2: Dominant axis (Y) analysis
+#   - Row 3: Resultant vector analysis
+#   - Row 4: PSD comparison
 ```
 
 ### For Data Collection:
@@ -291,7 +299,8 @@ Both show significant tremor requiring clinical evaluation.
 
 ---
 
-**Analyzer:** `offline_analyzer_motor_optimized.py`
-**Test Script:** `test_analyzer.py`
+**Analyzer:** `offline_analyzer.py` (v3.1)
+**Design:** Accelerometer-focused (no gyroscope)
+**Layout:** 4 rows × 3 columns (dominant axis + resultant vector)
 **Branch:** `claude/validate-data-quality-oN7Zo`
 **Report Date:** 2026-01-24
