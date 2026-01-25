@@ -641,12 +641,16 @@ Peak Power:         {metrics['peak_power']:.6f}
         self.ax_psd_axis.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH,
                                 color=COL_ESSENTIAL, alpha=0.2, label='Essential (6-12 Hz)')
 
-        # Mark dominant frequency
-        if metrics['dominant_freq'] > 0:
-            dom_psd_db = 10*np.log10(metrics['peak_power'] + 1e-12)
-            self.ax_psd_axis.plot(metrics['dominant_freq'], dom_psd_db, 'o',
+        # Mark dominant frequency for THIS axis PSD
+        tremor_mask_axis = (f_axis >= 3) & (f_axis <= 12)
+        if np.sum(tremor_mask_axis) > 0:
+            peak_idx_axis = np.argmax(psd_axis_raw[tremor_mask_axis])
+            axis_dom_freq = f_axis[tremor_mask_axis][peak_idx_axis]
+            axis_peak_power = psd_axis_raw[tremor_mask_axis][peak_idx_axis]
+            axis_dom_psd_db = 10*np.log10(axis_peak_power + 1e-12)
+            self.ax_psd_axis.plot(axis_dom_freq, axis_dom_psd_db, 'o',
                                  color='red', markersize=8,
-                                 label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
+                                 label=f"Peak: {axis_dom_freq:.2f} Hz")
 
         self.ax_psd_axis.set_title(f'Fig 4.1 - PSD: {max_axis}-Axis', fontweight='bold')
         self.ax_psd_axis.set_xlabel('Frequency (Hz)')
@@ -669,6 +673,13 @@ Peak Power:         {metrics['peak_power']:.6f}
                                color=COL_REST, alpha=0.2, label='Rest (3-7 Hz)')
         self.ax_psd_all.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH,
                                color=COL_ESSENTIAL, alpha=0.2, label='Essential (6-12 Hz)')
+
+        # Mark dominant frequency for resultant PSD (used for classification)
+        if metrics['dominant_freq'] > 0:
+            result_dom_psd_db = 10*np.log10(metrics['peak_power'] + 1e-12)
+            self.ax_psd_all.plot(metrics['dominant_freq'], result_dom_psd_db, 'o',
+                                color='red', markersize=8,
+                                label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
         self.ax_psd_all.set_title('Fig 4.2 - PSD: Resultant Vector', fontweight='bold')
         self.ax_psd_all.set_xlabel('Frequency (Hz)')
