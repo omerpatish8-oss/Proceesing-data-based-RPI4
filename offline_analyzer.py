@@ -408,22 +408,26 @@ class TremorAnalyzerResearch:
         metrics['rest_rms'] = np.sqrt(np.mean(accel_rest**2))
         metrics['ess_rms'] = np.sqrt(np.mean(accel_ess**2))
 
-        # Power in frequency bands
+        # Power in frequency bands (integral under PSD curve)
+        # Using trapezoidal integration: Power = ∫PSD(f)df
         rest_mask = (freq >= FREQ_REST_LOW) & (freq <= FREQ_REST_HIGH)
         ess_mask = (freq >= FREQ_ESSENTIAL_LOW) & (freq <= FREQ_ESSENTIAL_HIGH)
 
-        metrics['power_rest'] = np.sum(psd[rest_mask])
-        metrics['power_ess'] = np.sum(psd[ess_mask])
+        # Proper integration using trapezoidal rule
+        # Units: ∫(m²/s⁴/Hz) df = m²/s⁴
+        metrics['power_rest'] = np.trapz(psd[rest_mask], freq[rest_mask])
+        metrics['power_ess'] = np.trapz(psd[ess_mask], freq[ess_mask])
 
-        # Dominant frequency
+        # Dominant frequency and peak spectral density
         tremor_mask = (freq >= 3) & (freq <= 12)
         if np.sum(tremor_mask) > 0:
             peak_idx = np.argmax(psd[tremor_mask])
             metrics['dominant_freq'] = freq[tremor_mask][peak_idx]
-            metrics['peak_power'] = psd[tremor_mask][peak_idx]
+            # Peak power density at dominant frequency (m²/s⁴/Hz)
+            metrics['peak_power_density'] = psd[tremor_mask][peak_idx]
         else:
             metrics['dominant_freq'] = 0
-            metrics['peak_power'] = 0
+            metrics['peak_power_density'] = 0
 
         # Classification
         power_ratio = metrics['power_rest'] / (metrics['power_ess'] + 1e-10)
@@ -525,7 +529,7 @@ Power Ratio:        {metrics['power_rest']/(metrics['power_ess']+1e-10):.2f}
 FREQUENCY
 {'─'*35}
 Dominant Freq:      {metrics['dominant_freq']:.2f} Hz
-Peak Power:         {metrics['peak_power']:.6f}
+Peak PSD:           {metrics['peak_power_density']:.6f} m²/s⁴/Hz
 """
 
         self.ax_metrics.text(0.05, 0.95, metrics_text,
@@ -676,7 +680,7 @@ Peak Power:         {metrics['peak_power']:.6f}
 
         # Mark dominant frequency for resultant PSD (used for classification)
         if metrics['dominant_freq'] > 0:
-            result_dom_psd_db = 10*np.log10(metrics['peak_power'] + 1e-12)
+            result_dom_psd_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
             self.ax_psd_all.plot(metrics['dominant_freq'], result_dom_psd_db, 'o',
                                 color='red', markersize=8,
                                 label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
@@ -722,11 +726,12 @@ Peak Power:         {metrics['peak_power']:.6f}
         print(f"  Mean: {metrics['accel_mean']:.4f} m/s²")
         print(f"  RMS: {metrics['rest_rms']:.4f} m/s²")
         print(f"  Max: {metrics['accel_max']:.4f} m/s²")
-        print(f"  Power: {metrics['power_rest']:.6f}")
+        print(f"  Power: {metrics['power_rest']:.6f} m²/s⁴")
         print(f"\nEssential Tremor Band (6-12 Hz):")
         print(f"  RMS: {metrics['ess_rms']:.4f} m/s²")
-        print(f"  Power: {metrics['power_ess']:.6f}")
+        print(f"  Power: {metrics['power_ess']:.6f} m²/s⁴")
         print(f"\nDominant Frequency: {metrics['dominant_freq']:.2f} Hz")
+        print(f"Peak PSD: {metrics['peak_power_density']:.6f} m²/s⁴/Hz")
         print("="*70 + "\n")
 
 

@@ -358,20 +358,37 @@ max_amplitude = np.max(np.abs(signal))  # Absolute maximum
 
 **4️⃣ POWER (Spectral Power) - `power_rest`, `power_ess`**
 ```python
-# Integration of PSD over frequency range
-power_rest = Σ[PSD between 3-7 Hz]  # Sum
-power_ess = Σ[PSD between 6-12 Hz]
+# Integration of PSD over frequency range using trapezoidal rule
+# Power = ∫[f1 to f2] PSD(f) df
+power_rest = np.trapz(psd[3-7 Hz], freq[3-7 Hz])
+power_ess = np.trapz(psd[6-12 Hz], freq[6-12 Hz])
 ```
-- **What it is:** Sum (integral) of PSD in frequency range
+- **What it is:** **Integral (area under curve)** of PSD in frequency range
 - **Units:** **m²/s⁴** (meters squared per second to the fourth)
-  - **Why these units?**
-    - PSD units: (m/s²)²/Hz = m²/s⁴/Hz
-    - Power = ∫PSD dF = m²/s⁴/Hz × Hz = **m²/s⁴**
-- **Physical explanation:**
+
+  **📐 Unit Derivation:**
+  - PSD units: (m/s²)²/Hz = **m²/s⁴/Hz** (power spectral **density**)
+  - Integration: Power = ∫PSD(f) df
+  - Result: (m²/s⁴/Hz) × Hz = **m²/s⁴** (Hz cancels out)
+
+- **Mathematical explanation:**
   ```
-  PSD[f] = "power at single frequency f"
-  Power = ∫PSD df = "total power in frequency range"
+  PSD(f) = Power spectral density at frequency f [m²/s⁴/Hz]
+
+  Power = ∫[f1 to f2] PSD(f) df = Area under PSD curve
+
+  Discrete approximation (trapezoidal integration):
+  Power ≈ Σ[(PSD[i] + PSD[i+1])/2 × Δf]
   ```
+
+- **Why Integration and Not Simple Sum?**
+  - ❌ **Wrong:** `power = np.sum(psd[mask])`
+    - Units: m²/s⁴/Hz (missing the Hz integration!)
+    - Underestimates power
+  - ✅ **Correct:** `power = np.trapz(psd[mask], freq[mask])`
+    - Units: m²/s⁴ (proper integral)
+    - Accounts for frequency spacing
+    - Standard practice in signal processing
 - **Typical values:**
   - **Power < 2:** Weak tremor in this band
   - **Power 2-5:** Moderate tremor
@@ -392,20 +409,34 @@ power_ess = Σ[PSD between 6-12 Hz]
     - Red bar height = `power_rest`
     - Blue bar height = `power_ess`
 
-**5️⃣ DOMINANT FREQUENCY**
+**5️⃣ DOMINANT FREQUENCY & PEAK PSD**
 ```python
-peak_idx = np.argmax(psd[3:12 Hz])  # Find peak
-dominant_freq = freq[peak_idx]       # Its frequency
+# Find peak in tremor frequency range
+tremor_mask = (freq >= 3) & (freq <= 12)
+peak_idx = np.argmax(psd[tremor_mask])  # Find peak
+dominant_freq = freq[tremor_mask][peak_idx]       # Frequency at peak
+peak_power_density = psd[tremor_mask][peak_idx]   # PSD value at peak
 ```
-- **What it is:** Frequency with maximum power
-- **Units:** **Hz** (Hertz - cycles per second)
-- **Clinical meaning:**
-  - **3-5 Hz:** Typical rest tremor (Parkinson's)
-  - **5-7 Hz:** Borderline
-  - **8-12 Hz:** Essential tremor
+- **Dominant Frequency:**
+  - **What it is:** Frequency with maximum power spectral density
+  - **Units:** **Hz** (Hertz - cycles per second)
+  - **Clinical meaning:**
+    - **3-5 Hz:** Typical rest tremor (Parkinson's)
+    - **5-7 Hz:** Borderline
+    - **8-12 Hz:** Essential tremor
+
+- **Peak PSD:**
+  - **What it is:** Maximum PSD value in tremor range
+  - **Units:** **m²/s⁴/Hz** (power spectral **density** - note the /Hz!)
+  - **Not the same as integrated Power!**
+    - Peak PSD = height of peak in PSD plot
+    - Power = area under PSD curve
+  - **Used for:** Marking the peak on PSD plots
+
 - **Where in plots:**
   - **Figure 4, Fig 4.1 & 4.2**: **Red circle ● on peak!**
   - Label: `Peak: 5.75 Hz` (example)
+  - Height of red circle = Peak PSD value (in dB for plotting)
 
 ---
 
@@ -416,9 +447,10 @@ dominant_freq = freq[peak_idx]       # Its frequency
 | **Mean** | 0.0014 | m/s² | Figure 2/3, Plot 2 | Imaginary horizontal line (near zero) |
 | **RMS** | 1.6238 | m/s² | Figure 2/3, Plot 2 | **In plot title!** "RMS: X.XXXX" |
 | **Max** | 8.8714 | m/s² | Figure 2/3, Plot 2 | Highest point |
-| **Power Rest** | 6.5008 | m²/s⁴ | Figure 4, Plot 3 | **Red bar height** |
-| **Power Ess** | 8.7993 | m²/s⁴ | Figure 4, Plot 3 | **Blue bar height** |
-| **Dom. Freq** | 5.75 | Hz | Figure 4, Plot 1&2 | **Red circle ●** |
+| **Power Rest** | 6.5008 | m²/s⁴ | Figure 4, Plot 3 | **Red bar height** (integrated!) |
+| **Power Ess** | 8.7993 | m²/s⁴ | Figure 4, Plot 3 | **Blue bar height** (integrated!) |
+| **Dom. Freq** | 5.75 | Hz | Figure 4, Plot 1&2 | **Red circle ● position** |
+| **Peak PSD** | 2.731 | m²/s⁴/Hz | Figure 4, Plot 1&2 | **Red circle ● height** (in dB) |
 
 **Example from Your Data - Complete Decoding:**
 ```
