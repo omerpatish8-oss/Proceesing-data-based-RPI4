@@ -320,7 +320,7 @@ class TremorAnalyzerResearch:
         # Calculate metrics
         metrics = self.calculate_metrics(
             accel_mag, result_filtered, result_rest, result_ess,
-            f_result, psd_result, max_axis, axis_color
+            f_result, psd_result_raw, max_axis, axis_color
         )
 
         # Visualize everything
