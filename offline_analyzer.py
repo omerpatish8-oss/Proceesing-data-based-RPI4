@@ -415,7 +415,7 @@ class TremorAnalyzerResearch:
         self.ax_bode_mag.axvline(FREQ_TREMOR_HIGH, color='blue', linestyle=':', alpha=0.5, label=f'{FREQ_TREMOR_HIGH} Hz')
         self.ax_bode_mag.axhline(-3, color='green', linestyle='--', alpha=0.5, label='-3 dB')
 
-        self.ax_bode_mag.set_title('Filter Magnitude Response (Butterworth Order 4)', fontweight='bold')
+        self.ax_bode_mag.set_title('Fig 1.1 - Filter Magnitude Response (Butterworth Order 4)', fontweight='bold')
         self.ax_bode_mag.set_xlabel('Frequency (Hz)')
         self.ax_bode_mag.set_ylabel('Magnitude (dB)')
         self.ax_bode_mag.set_xlim(0, 20)
@@ -430,7 +430,7 @@ class TremorAnalyzerResearch:
         self.ax_bode_phase.axvline(FREQ_TREMOR_LOW, color='red', linestyle=':', alpha=0.5)
         self.ax_bode_phase.axvline(FREQ_TREMOR_HIGH, color='blue', linestyle=':', alpha=0.5)
 
-        self.ax_bode_phase.set_title('Filter Phase Response', fontweight='bold')
+        self.ax_bode_phase.set_title('Fig 1.2 - Filter Phase Response', fontweight='bold')
         self.ax_bode_phase.set_xlabel('Frequency (Hz)')
         self.ax_bode_phase.set_ylabel('Phase (degrees)')
         self.ax_bode_phase.set_xlim(0, 20)
@@ -474,7 +474,7 @@ Peak Power:        {metrics['peak_power']:.6f}
                             transform=self.ax_metrics.transAxes,
                             fontfamily='monospace', fontsize=8,
                             verticalalignment='top')
-        self.ax_metrics.set_title('Clinical Metrics (Research-Based)', fontweight='bold', loc='left')
+        self.ax_metrics.set_title('Fig 1.3 - Clinical Metrics (Research-Based)', fontweight='bold', loc='left')
 
         # ============================================================
         # ROW 2: HIGHEST ENERGY AXIS ANALYSIS
@@ -482,8 +482,8 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         # Raw signal
         self.ax_axis_raw.clear()
-        self.ax_axis_raw.plot(t, axis_raw, color=axis_color, linewidth=0.8, alpha=0.7)
-        self.ax_axis_raw.set_title(f'{max_axis}-Axis (Highest Energy) - Raw | RMS: {np.sqrt(np.mean(axis_raw**2)):.4f} m/s²',
+        self.ax_axis_raw.plot(t, axis_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
+        self.ax_axis_raw.set_title(f'Fig 2.1 - {max_axis}-Axis Raw | RMS: {np.sqrt(np.mean(axis_raw**2)):.4f} m/s²',
                                   fontweight='bold')
         self.ax_axis_raw.set_ylabel(f'{max_axis} (m/s²)')
         self.ax_axis_raw.set_xlabel('Time (s)')
@@ -492,14 +492,14 @@ Peak Power:        {metrics['peak_power']:.6f}
 
         # Filtered signal
         self.ax_axis_filtered.clear()
-        self.ax_axis_filtered.plot(t, axis_filt, color=axis_color, linewidth=1.2)
+        self.ax_axis_filtered.plot(t, axis_filt, color=COL_FILTERED, linewidth=1.2)
 
         # Add envelope
         envelope = np.abs(hilbert(axis_filt))
-        self.ax_axis_filtered.plot(t, envelope, '--', color=axis_color, alpha=0.4, linewidth=0.8)
-        self.ax_axis_filtered.plot(t, -envelope, '--', color=axis_color, alpha=0.4, linewidth=0.8)
+        self.ax_axis_filtered.plot(t, envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+        self.ax_axis_filtered.plot(t, -envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        self.ax_axis_filtered.set_title(f'{max_axis}-Axis Filtered (3-12 Hz) | RMS: {np.sqrt(np.mean(axis_filt**2)):.4f} m/s²',
+        self.ax_axis_filtered.set_title(f'Fig 2.2 - {max_axis}-Axis Filtered (3-12 Hz) | RMS: {np.sqrt(np.mean(axis_filt**2)):.4f} m/s²',
                                        fontweight='bold')
         self.ax_axis_filtered.set_ylabel(f'{max_axis} (m/s²)')
         self.ax_axis_filtered.set_xlabel('Time (s)')
@@ -510,10 +510,10 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_axis_overlay.clear()
         self.ax_axis_overlay.plot(t, axis_raw, color=COL_RAW, linewidth=1,
                                  alpha=0.5, label='Raw')
-        self.ax_axis_overlay.plot(t, axis_filt, color=axis_color, linewidth=1.5,
+        self.ax_axis_overlay.plot(t, axis_filt, color=COL_FILTERED, linewidth=1.5,
                                  label='Filtered (3-12 Hz)')
 
-        self.ax_axis_overlay.set_title(f'{max_axis}-Axis: Raw vs Filtered', fontweight='bold')
+        self.ax_axis_overlay.set_title(f'Fig 2.3 - {max_axis}-Axis: Raw vs Filtered', fontweight='bold')
         self.ax_axis_overlay.set_ylabel(f'{max_axis} (m/s²)')
         self.ax_axis_overlay.set_xlabel('Time (s)')
         self.ax_axis_overlay.grid(True, alpha=0.3)
@@ -527,7 +527,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         # Raw resultant
         self.ax_result_raw.clear()
         self.ax_result_raw.plot(t, result_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_result_raw.set_title(f'Resultant Vector (Raw) | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s²',
+        self.ax_result_raw.set_title(f'Fig 3.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s²',
                                     fontweight='bold')
         self.ax_result_raw.set_ylabel('Magnitude (m/s²)')
         self.ax_result_raw.set_xlabel('Time (s)')
@@ -543,7 +543,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        self.ax_result_filtered.set_title(f'Resultant Filtered (3-12 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s²',
+        self.ax_result_filtered.set_title(f'Fig 3.2 - Resultant Filtered (3-12 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s²',
                                          fontweight='bold')
         self.ax_result_filtered.set_ylabel('Magnitude (m/s²)')
         self.ax_result_filtered.set_xlabel('Time (s)')
@@ -557,7 +557,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_result_overlay.plot(t, result_filt, color=COL_FILTERED, linewidth=1.5,
                                    label='Filtered (3-12 Hz)')
 
-        self.ax_result_overlay.set_title('Resultant Vector: Raw vs Filtered', fontweight='bold')
+        self.ax_result_overlay.set_title('Fig 3.3 - Resultant: Raw vs Filtered', fontweight='bold')
         self.ax_result_overlay.set_ylabel('Magnitude (m/s²)')
         self.ax_result_overlay.set_xlabel('Time (s)')
         self.ax_result_overlay.grid(True, alpha=0.3)
@@ -590,7 +590,7 @@ Peak Power:        {metrics['peak_power']:.6f}
                                  color='red', markersize=8,
                                  label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
-        self.ax_psd_axis.set_title(f'PSD - {max_axis} Axis', fontweight='bold')
+        self.ax_psd_axis.set_title(f'Fig 4.1 - PSD: {max_axis}-Axis', fontweight='bold')
         self.ax_psd_axis.set_xlabel('Frequency (Hz)')
         self.ax_psd_axis.set_ylabel('Power (dB)')
         self.ax_psd_axis.set_xlim(0, 20)
@@ -612,7 +612,7 @@ Peak Power:        {metrics['peak_power']:.6f}
         self.ax_psd_all.axvspan(FREQ_ESSENTIAL_LOW, FREQ_ESSENTIAL_HIGH,
                                color=COL_ESSENTIAL, alpha=0.2, label='Essential (6-12 Hz)')
 
-        self.ax_psd_all.set_title('PSD - Resultant Vector', fontweight='bold')
+        self.ax_psd_all.set_title('Fig 4.2 - PSD: Resultant Vector', fontweight='bold')
         self.ax_psd_all.set_xlabel('Frequency (Hz)')
         self.ax_psd_all.set_ylabel('Power (dB)')
         self.ax_psd_all.set_xlim(0, 20)
@@ -634,7 +634,7 @@ Peak Power:        {metrics['peak_power']:.6f}
                               f'{power:.4f}',
                               ha='center', va='bottom', fontsize=9)
 
-        self.ax_bands.set_title('Tremor Band Power (Resultant)', fontweight='bold')
+        self.ax_bands.set_title('Fig 4.3 - Tremor Band Power', fontweight='bold')
         self.ax_bands.set_ylabel('Power (m²/s⁴)')
         self.ax_bands.grid(True, alpha=0.3, axis='y')
 
