@@ -422,10 +422,11 @@ dominant_freq = freq[peak_idx]       # התדר שלה
 
 **דוגמה מהתמונה שלך - פענוח מלא:**
 ```
-┌─ Clinical Metrics (טבלה מצד ימין) ─┐
+┌─ Clinical Metrics (טבלה ב-Figure 1) ─┐
 │                                      │
+│ Axis RMS (Y): 3.5928 m/s²           │ ← RMS של ציר Y בלבד
+│ Resultant RMS: 1.6238 m/s²          │ ← RMS של וקטור תוצאתי
 │ Mean: 0.0014 m/s²                   │ ← קרוב לאפס ✓
-│ RMS: 1.6238 m/s²                    │ ← SEVERE! (>0.30)
 │ Max: 8.8714 m/s²                    │ ← פיק גבוה מאוד!
 │                                      │
 │ Rest (3-7 Hz):                      │
@@ -442,23 +443,29 @@ dominant_freq = freq[peak_idx]       # התדר שלה
 └──────────────────────────────────────┘
 ```
 
-**התאמה לגרפים:**
-1. **Row 4, Plot 3** (Bar Chart):
+**התאמה לגרפים (בממשק MATLAB עם טאבים):**
+1. **Figure 4, Fig 4.3** (Bar Chart):
    - עמודה אדומה גובה 6.5 ← Power Rest
    - עמודה כחולה גובה 8.8 ← Power Essential
    - כחול > אדום → Essential דומיננטי קצת
 
-2. **Row 4, Plot 1 & 2** (PSD):
+2. **Figure 4, Fig 4.1 & 4.2** (PSD):
    - עיגול אדום ● ב-5.75 Hz ← Dominant Frequency
    - אזור כחול (6-12) גבוה יותר ← Essential חזק יותר
 
-3. **Row 2, Plot 2** (Y-Axis Filtered):
-   - כותרת: "RMS: 1.6238 m/s²" ← חומרה חמורה
+3. **Figure 2, Fig 2.2** (Y-Axis Filtered):
+   - כותרת: "RMS: 3.5928 m/s²" ← RMS של ציר Y
    - רוחב האות גדול ← RMS גבוה
 
-4. **Row 3, Plot 2** (Resultant Filtered):
-   - כותרת: "RMS: 1.6238 m/s²" ← אותו ערך
+4. **Figure 3, Fig 3.2** (Resultant Filtered):
+   - כותרת: "RMS: 1.6238 m/s²" ← RMS של וקטור תוצאתי
    - עטיפה רחבה ← רעד חזק
+
+**ניווט:**
+- לחץ על טאב "Figure 1" לטבלת מדדים
+- לחץ על טאב "Figure 2" לניתוח ציר Y
+- לחץ על טאב "Figure 3" לניתוח וקטור תוצאתי
+- לחץ על טאב "Figure 4" לניתוח תדרים (PSD)
 
 ### **שלב 2.8: סיווג רעד**
 

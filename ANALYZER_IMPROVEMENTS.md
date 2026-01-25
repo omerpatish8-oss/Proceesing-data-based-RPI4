@@ -1,8 +1,9 @@
-# Tremor Analyzer - Research-Based Design (v3.1)
+# Tremor Analyzer - Research-Based Design (v3.2)
 
-**Date:** 2026-01-24
+**Date:** 2026-01-25
 **File:** `offline_analyzer.py`
 **Approach:** Accelerometer-focused with axis-specific + resultant vector analysis
+**Layout:** MATLAB-style tabbed figures for easy navigation
 
 ---
 
@@ -17,42 +18,52 @@
 
 ---
 
-## 📊 Visualization Layout (4 Rows × 3 Columns)
+## 📊 Visualization Layout (MATLAB-Style Tabs)
 
-### **Row 1: Filter Characteristics & Metrics**
+### **Figure 1: Filter Characteristics & Metrics** (Tab 1)
 ```
-[Bode Magnitude]  [Bode Phase]  [Clinical Metrics Table]
+[Fig 1.1: Bode Magnitude]  [Fig 1.2: Bode Phase]  [Fig 1.3: Clinical Metrics Table]
 ```
 - **Purpose:** Verify filter design and view classification results
 - **Bode plots:** Show Butterworth order 4 frequency response (3-12 Hz bandpass)
-- **Metrics table:** Tremor type, confidence, dominant axis, RMS, power, frequency
+- **Metrics table:** Tremor type, confidence, dominant axis, Axis RMS, Resultant RMS, power, frequency
+- **Navigation:** First tab, focus on filter verification and summary
 
-### **Row 2: Highest Energy Axis Analysis**
+### **Figure 2: Highest Energy Axis Analysis** (Tab 2)
 ```
-[Y-Axis Raw]  [Y-Axis Filtered]  [Y-Axis Raw vs Filtered]
+[Fig 2.1: Y-Axis Raw]  [Fig 2.2: Y-Axis Filtered]  [Fig 2.3: Y-Axis Raw vs Filtered]
 ```
 - **Purpose:** Detailed view of dominant tremor direction
 - **Auto-detection:** Automatically selects X, Y, or Z based on signal energy
 - **Envelope:** Hilbert transform shows tremor amplitude modulation
 - **Clinical insight:** Identifies primary tremor axis (e.g., anterior-posterior Y-axis)
+- **Navigation:** Second tab, independent zoom/pan controls
 
-### **Row 3: Resultant Vector Analysis**
+### **Figure 3: Resultant Vector Analysis** (Tab 3)
 ```
-[Resultant Raw]  [Resultant Filtered]  [Resultant Raw vs Filtered]
+[Fig 3.1: Resultant Raw]  [Fig 3.2: Resultant Filtered]  [Fig 3.3: Resultant Raw vs Filtered]
 ```
 - **Purpose:** Overall tremor magnitude independent of direction
 - **Calculation:** `√(Ax² + Ay² + Az²)` after gravity removal
 - **Advantage:** Combines all axes for total tremor assessment
 - **Clinical use:** Overall tremor severity scoring
+- **Navigation:** Third tab, independent zoom/pan controls
 
-### **Row 4: Power Spectral Density (PSD) Analysis**
+### **Figure 4: Power Spectral Density (PSD) Analysis** (Tab 4)
 ```
-[PSD - Dominant Axis]  [PSD - Resultant Vector]  [Band Power Comparison]
+[Fig 4.1: PSD - Dominant Axis]  [Fig 4.2: PSD - Resultant Vector]  [Fig 4.3: Band Power Comparison]
 ```
 - **Purpose:** Frequency domain analysis for tremor classification
 - **PSD plots:** Welch's method with tremor bands highlighted
 - **Resultant view:** PSD of resultant magnitude (raw vs filtered)
 - **Bar chart:** Rest (3-7 Hz) vs Essential (6-12 Hz) power comparison with units (m²/s⁴)
+- **Navigation:** Fourth tab, independent zoom/pan controls
+
+**MATLAB-Style Benefits:**
+- Each figure is a separate entity (like `figure(1)`, `figure(2)`, etc.)
+- Independent navigation toolbars for zoom/pan/save
+- Easier to focus on specific analysis aspects
+- Better organization for presentation and documentation
 
 ---
 
@@ -165,9 +176,10 @@ Mixed Tremor:
 - **Purple:** Filter response curves
 - **Red (Crimson):** Rest tremor band (3-7 Hz)
 - **Blue (Royal Blue):** Essential tremor band (6-12 Hz)
-- **Dark Gray:** Raw signals
-- **Tomato Red:** Filtered signals
+- **Dark Slate Gray:** Raw signals (consistent across all plots)
+- **Tomato Red:** Filtered signals (consistent across all plots)
 - **Axis colors:** X=Red, Y=Gray, Z=Blue
+- **Row 2 & 3 colors:** Unified gray/tomato scheme (no axis-specific colors)
 
 ### **Plot Enhancements:**
 - Hilbert envelope on filtered signals (shows amplitude modulation)
@@ -187,8 +199,9 @@ Confidence: High (ratio: 2.12)
 ACCELEROMETER METRICS
 ───────────────────────────────────
 Dominant Axis: Y
+Axis RMS (Y):      3.5928 m/s²
+Resultant RMS:     1.6238 m/s²
 Mean Amplitude:    0.0014 m/s²
-RMS:               1.6238 m/s²
 Max Amplitude:     8.8714 m/s²
 
 TREMOR BAND ANALYSIS
@@ -213,18 +226,21 @@ Peak Power:        2.456789
 
 ## 🔄 Comparison: Previous vs Current Design
 
-| Aspect | v3.0 (Previous) | v3.1 (Current) |
-|--------|-----------------|----------------|
-| **Layout** | 4×3 = 12 plots | 4×3 = 12 plots |
-| **Gyroscope** | Included with warnings | ✅ **Removed** |
-| **Axis Analysis** | Resultant only | ✅ **Highest energy axis** |
-| **Row 1** | Bode + Filter comparison | Bode + **Metrics table** |
-| **Row 2** | Accelerometer resultant | ✅ **Dominant axis (Y/X/Z)** |
-| **Row 3** | PSD + Bands + Spectrogram | ✅ **Resultant vector** |
-| **Row 4** | Gyro + Metrics | ✅ **PSD: Axis + All + Bands** |
-| **Focus** | Both sensors | ✅ **Accelerometer only** |
-| **Clarity** | Good | ✅ **Improved** |
-| **Clinical relevance** | High | ✅ **Higher** |
+| Aspect | v3.0 (Original) | v3.1 (Grid) | v3.2 (Current - MATLAB) |
+|--------|-----------------|-------------|-------------------------|
+| **Layout** | 4×3 grid | 4×3 grid | ✅ **4 tabbed figures** |
+| **Gyroscope** | Included | ❌ Removed | ❌ Removed |
+| **Axis Analysis** | Resultant only | Highest energy | ✅ **Highest energy** |
+| **Figure 1** | Bode + Filter | Bode + Metrics | ✅ **Bode + Metrics** |
+| **Figure 2** | Accel resultant | Dominant axis | ✅ **Dominant axis** |
+| **Figure 3** | PSD + Bands | Resultant vector | ✅ **Resultant vector** |
+| **Figure 4** | Gyro + Metrics | PSD comparison | ✅ **PSD comparison** |
+| **Navigation** | Single view | Single view | ✅ **MATLAB-style tabs** |
+| **RMS Display** | Single value | Single value | ✅ **Axis + Resultant** |
+| **Figure Numbers** | None | None | ✅ **Fig 1.1-4.3** |
+| **Focus** | Both sensors | Accelerometer | ✅ **Accelerometer** |
+| **Clarity** | Good | Better | ✅ **Best** |
+| **Clinical relevance** | High | Higher | ✅ **Highest** |
 
 ---
 
@@ -259,15 +275,17 @@ Dominant Frequency: 5.75 Hz
 
 **File 1 Example:**
 - Dominant axis: **Y** (anterior-posterior movement)
-- Classification: **Mixed Tremor** (ratio: 0.74)
+- Axis RMS (Y): **3.76 m/s²** (severe)
+- Resultant RMS: **1.62 m/s²** (severe)
+- Classification: **Mixed Tremor** (ratio: 1.46)
 - Dominant frequency: **5.75 Hz** (borderline rest/essential)
-- Severity: **Severe** (RMS: 1.62 m/s²)
 
 **File 2 Example:**
 - Dominant axis: **Y** (anterior-posterior movement)
+- Axis RMS (Y): **2.80 m/s²** (severe)
+- Resultant RMS: **1.78 m/s²** (severe)
 - Classification: **Rest Tremor** (ratio: 2.12)
 - Dominant frequency: **5.75 Hz** (rest tremor range)
-- Severity: **Severe** (RMS: 1.78 m/s²)
 
 ---
 
@@ -282,13 +300,14 @@ python3 offline_analyzer.py
 ### **Steps:**
 1. Click "📂 Load CSV Data"
 2. Select tremor CSV file
-3. View results:
-   - **Top right:** Classification and confidence
-   - **Row 1:** Filter design + metrics
-   - **Row 2:** Dominant axis analysis (e.g., Y-axis)
-   - **Row 3:** Resultant vector analysis
-   - **Row 4:** Frequency analysis (PSD)
-4. Check console for numerical metrics
+3. Navigate through tabs:
+   - **Top right panel:** Classification and confidence
+   - **Figure 1 tab:** Filter design + metrics table
+   - **Figure 2 tab:** Dominant axis analysis (e.g., Y-axis)
+   - **Figure 3 tab:** Resultant vector analysis
+   - **Figure 4 tab:** Frequency analysis (PSD)
+4. Use toolbar in each figure for zoom/pan/save
+5. Check console for numerical metrics
 
 ### **Interpreting Results:**
 
@@ -380,22 +399,25 @@ python3 offline_analyzer.py
 
 ## 📝 Summary
 
-**Current Design (v3.1):**
+**Current Design (v3.2):**
 - ✅ Accelerometer-only (no gyroscope)
 - ✅ Highest energy axis + resultant vector
-- ✅ Clear 4×3 layout
+- ✅ MATLAB-style tabbed layout (4 separate figures)
+- ✅ Figure numbering (Fig 1.1-4.3) for easy reference
 - ✅ Bode plots for filter verification
-- ✅ Clinical metrics table
+- ✅ Clinical metrics table with Axis RMS + Resultant RMS
 - ✅ Multi-axis PSD comparison
 - ✅ Research-based features
 - ✅ Automated tremor classification
-- ✅ User-friendly visualization
+- ✅ User-friendly navigation
+- ✅ Independent zoom/pan per figure
 - ✅ Quantitative clinical output
 
-**Result:** Production-ready tremor analyzer optimized for motor-holding test scenario, providing both axis-specific and overall tremor assessment with automated classification.
+**Result:** Production-ready tremor analyzer optimized for motor-holding test scenario, providing both axis-specific and overall tremor assessment with automated classification. MATLAB-style interface for professional presentation.
 
 ---
 
 **File:** `offline_analyzer.py`
 **Branch:** `claude/validate-data-quality-oN7Zo`
-**Status:** Ready for clinical use ✅
+**Version:** v3.2 (MATLAB-style tabs)
+**Status:** Ready for clinical use and professional presentation ✅

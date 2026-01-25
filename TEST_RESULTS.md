@@ -229,24 +229,41 @@
 
 When viewing in GUI (`offline_analyzer.py`):
 
-**New Layout (v3.1):**
-1. **Row 1 (Filter + Metrics):** Bode plots + Clinical metrics table
-2. **Row 2 (Dominant Axis):** Y-axis (gray) raw, filtered, and overlay with time/units labels
-3. **Row 3 (Resultant Vector):** Magnitude raw, filtered, and overlay with time/units labels
-4. **Row 4 (PSD Analysis):** Y-axis PSD, resultant vector PSD, band power bars (m²/s⁴)
+**New Layout (v3.2 - MATLAB-style tabs):**
 
-**Look for:**
-- **Row 1:** Filter response verification + tremor classification display
-- **Row 2:** Y-axis (dominant) showing strong 5-6 Hz oscillations with envelope
-- **Row 3:** Resultant vector showing overall tremor magnitude
-- **Row 4:** Clear peaks at 5.5-5.75 Hz in PSD, rest band (red) > essential band (blue)
+**Figure 1 - Filters & Metrics** (Tab 1)
+- Fig 1.1: Bode Magnitude Response
+- Fig 1.2: Bode Phase Response
+- Fig 1.3: Clinical Metrics Table (with Axis RMS and Resultant RMS)
+
+**Figure 2 - Dominant Axis** (Tab 2)
+- Fig 2.1: Y-Axis Raw with RMS in title
+- Fig 2.2: Y-Axis Filtered (3-12 Hz) with envelope and RMS
+- Fig 2.3: Y-Axis Raw vs Filtered overlay
+
+**Figure 3 - Resultant Vector** (Tab 3)
+- Fig 3.1: Resultant Vector Raw with RMS in title
+- Fig 3.2: Resultant Filtered (3-12 Hz) with envelope and RMS
+- Fig 3.3: Resultant Raw vs Filtered overlay
+
+**Figure 4 - PSD Analysis** (Tab 4)
+- Fig 4.1: PSD of Dominant Axis (Y) with tremor bands highlighted
+- Fig 4.2: PSD of Resultant Vector with tremor bands highlighted
+- Fig 4.3: Tremor Band Power bar chart (m²/s⁴)
+
+**Navigation:**
+- Click tabs at the top to switch between figures
+- Each figure has its own zoom/pan toolbar
+- MATLAB-style organization for easy reference
 
 **Key Observations:**
 - Dominant axis automatically identified as Y (gray color, anterior-posterior)
 - All time-domain plots include Time (s) and units (m/s²) on axes
 - Envelope plots show tremor intensity modulation
+- Clinical Metrics table shows BOTH Axis RMS and Resultant RMS for clarity
 - Resultant PSD shows overall magnitude frequency content
 - Bar chart shows power with proper units (m²/s⁴)
+- Figure numbering (Fig 1.1, 1.2, etc.) matches MATLAB convention
 
 ---
 
@@ -254,15 +271,15 @@ When viewing in GUI (`offline_analyzer.py`):
 
 ### For Testing:
 ```bash
-# Run GUI analyzer (v3.1)
+# Run GUI analyzer (v3.2)
 python3 offline_analyzer.py
 # Click "Load CSV Data"
 # Select either CSV file
-# View 4×3 dashboard:
-#   - Row 1: Filter design + metrics
-#   - Row 2: Dominant axis (Y) analysis
-#   - Row 3: Resultant vector analysis
-#   - Row 4: PSD comparison
+# Navigate through 4 tabbed figures:
+#   - Figure 1: Filter design + metrics
+#   - Figure 2: Dominant axis (Y) analysis
+#   - Figure 3: Resultant vector analysis
+#   - Figure 4: PSD comparison
 ```
 
 ### For Data Collection:
@@ -299,8 +316,8 @@ Both show significant tremor requiring clinical evaluation.
 
 ---
 
-**Analyzer:** `offline_analyzer.py` (v3.1)
+**Analyzer:** `offline_analyzer.py` (v3.2)
 **Design:** Accelerometer-focused (no gyroscope)
-**Layout:** 4 rows × 3 columns (dominant axis + resultant vector)
+**Layout:** 4 MATLAB-style tabbed figures (dominant axis + resultant vector)
 **Branch:** `claude/validate-data-quality-oN7Zo`
-**Report Date:** 2026-01-24
+**Report Date:** 2026-01-25
