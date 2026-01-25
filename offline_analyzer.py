@@ -105,54 +105,106 @@ class TremorAnalyzerResearch:
         self.lbl_confidence.pack()
 
     def create_analysis_dashboard(self):
-        """Create research-based analysis dashboard"""
-        # Main canvas frame
-        canvas_frame = ttk.Frame(self.root)
-        canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        """Create research-based analysis dashboard - MATLAB style separate figures"""
+        # Main container with notebook for separate figures
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create figure with 4x3 layout
-        self.fig = plt.figure(figsize=(16, 10))
-        gs = GridSpec(4, 3, figure=self.fig, hspace=0.4, wspace=0.3)
+        # Create notebook (tabbed interface) for MATLAB-style figures
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Row 1: FILTER CHARACTERISTICS
-        self.ax_bode_mag = self.fig.add_subplot(gs[0, 0])
-        self.ax_bode_phase = self.fig.add_subplot(gs[0, 1])
-        self.ax_metrics = self.fig.add_subplot(gs[0, 2])
+        # Store figures, canvases, and axes
+        self.figures = []
+        self.canvases = []
+        self.all_axes = []
 
-        # Row 2: HIGHEST ENERGY AXIS ANALYSIS
-        self.ax_axis_raw = self.fig.add_subplot(gs[1, 0])
-        self.ax_axis_filtered = self.fig.add_subplot(gs[1, 1])
-        self.ax_axis_overlay = self.fig.add_subplot(gs[1, 2])
+        # ==================== FIGURE 1: FILTER CHARACTERISTICS ====================
+        fig1_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig1_frame, text="Figure 1 - Filters & Metrics")
 
-        # Row 3: RESULTANT VECTOR ANALYSIS
-        self.ax_result_raw = self.fig.add_subplot(gs[2, 0])
-        self.ax_result_filtered = self.fig.add_subplot(gs[2, 1])
-        self.ax_result_overlay = self.fig.add_subplot(gs[2, 2])
+        self.fig1 = plt.figure(figsize=(15, 4))
+        gs1 = GridSpec(1, 3, figure=self.fig1, hspace=0.3, wspace=0.3)
 
-        # Row 4: PSD ANALYSIS
-        self.ax_psd_axis = self.fig.add_subplot(gs[3, 0])
-        self.ax_psd_all = self.fig.add_subplot(gs[3, 1])
-        self.ax_bands = self.fig.add_subplot(gs[3, 2])
+        self.ax_bode_mag = self.fig1.add_subplot(gs1[0, 0])
+        self.ax_bode_phase = self.fig1.add_subplot(gs1[0, 1])
+        self.ax_metrics = self.fig1.add_subplot(gs1[0, 2])
 
-        # Canvas
-        self.canvas = FigureCanvasTkAgg(self.fig, master=canvas_frame)
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        canvas1 = FigureCanvasTkAgg(self.fig1, master=fig1_frame)
+        canvas1.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar1 = NavigationToolbar2Tk(canvas1, fig1_frame)
+        toolbar1.update()
 
-        # Toolbar
-        toolbar_frame = ttk.Frame(canvas_frame)
-        toolbar_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
-        toolbar.update()
+        self.figures.append(self.fig1)
+        self.canvases.append(canvas1)
+        self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase, self.ax_metrics])
+
+        # ==================== FIGURE 2: DOMINANT AXIS ANALYSIS ====================
+        fig2_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig2_frame, text="Figure 2 - Dominant Axis")
+
+        self.fig2 = plt.figure(figsize=(15, 4))
+        gs2 = GridSpec(1, 3, figure=self.fig2, hspace=0.3, wspace=0.3)
+
+        self.ax_axis_raw = self.fig2.add_subplot(gs2[0, 0])
+        self.ax_axis_filtered = self.fig2.add_subplot(gs2[0, 1])
+        self.ax_axis_overlay = self.fig2.add_subplot(gs2[0, 2])
+
+        canvas2 = FigureCanvasTkAgg(self.fig2, master=fig2_frame)
+        canvas2.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar2 = NavigationToolbar2Tk(canvas2, fig2_frame)
+        toolbar2.update()
+
+        self.figures.append(self.fig2)
+        self.canvases.append(canvas2)
+        self.all_axes.extend([self.ax_axis_raw, self.ax_axis_filtered, self.ax_axis_overlay])
+
+        # ==================== FIGURE 3: RESULTANT VECTOR ANALYSIS ====================
+        fig3_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig3_frame, text="Figure 3 - Resultant Vector")
+
+        self.fig3 = plt.figure(figsize=(15, 4))
+        gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.3)
+
+        self.ax_result_raw = self.fig3.add_subplot(gs3[0, 0])
+        self.ax_result_filtered = self.fig3.add_subplot(gs3[0, 1])
+        self.ax_result_overlay = self.fig3.add_subplot(gs3[0, 2])
+
+        canvas3 = FigureCanvasTkAgg(self.fig3, master=fig3_frame)
+        canvas3.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar3 = NavigationToolbar2Tk(canvas3, fig3_frame)
+        toolbar3.update()
+
+        self.figures.append(self.fig3)
+        self.canvases.append(canvas3)
+        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay])
+
+        # ==================== FIGURE 4: PSD ANALYSIS ====================
+        fig4_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig4_frame, text="Figure 4 - PSD Analysis")
+
+        self.fig4 = plt.figure(figsize=(15, 4))
+        gs4 = GridSpec(1, 3, figure=self.fig4, hspace=0.3, wspace=0.3)
+
+        self.ax_psd_axis = self.fig4.add_subplot(gs4[0, 0])
+        self.ax_psd_all = self.fig4.add_subplot(gs4[0, 1])
+        self.ax_bands = self.fig4.add_subplot(gs4[0, 2])
+
+        canvas4 = FigureCanvasTkAgg(self.fig4, master=fig4_frame)
+        canvas4.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar4 = NavigationToolbar2Tk(canvas4, fig4_frame)
+        toolbar4.update()
+
+        self.figures.append(self.fig4)
+        self.canvases.append(canvas4)
+        self.all_axes.extend([self.ax_psd_axis, self.ax_psd_all, self.ax_bands])
 
         # Initialize plots
         self.clear_all_plots()
 
     def clear_all_plots(self):
         """Clear all plots and show instructions"""
-        for ax in [self.ax_bode_mag, self.ax_bode_phase, self.ax_metrics,
-                   self.ax_axis_raw, self.ax_axis_filtered, self.ax_axis_overlay,
-                   self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay,
-                   self.ax_psd_axis, self.ax_psd_all, self.ax_bands]:
+        for ax in self.all_axes:
             ax.clear()
             ax.text(0.5, 0.5, 'Load CSV data to begin analysis',
                    ha='center', va='center', transform=ax.transAxes,
@@ -160,7 +212,9 @@ class TremorAnalyzerResearch:
             ax.set_xticks([])
             ax.set_yticks([])
 
-        self.canvas.draw()
+        # Draw all canvases
+        for canvas in self.canvases:
+            canvas.draw()
 
     def load_and_process(self):
         """Load CSV file and process data"""
@@ -642,7 +696,9 @@ Peak Power:         {metrics['peak_power']:.6f}
         self.ax_bands.set_ylabel('Power (m²/s⁴)')
         self.ax_bands.grid(True, alpha=0.3, axis='y')
 
-        self.canvas.draw()
+        # Draw all canvases (MATLAB-style separate figures)
+        for canvas in self.canvases:
+            canvas.draw()
 
         # Print to console
         print("\n" + "="*70)
