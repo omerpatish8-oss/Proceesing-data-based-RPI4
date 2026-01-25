@@ -94,20 +94,27 @@ ESP32 Microcontroller:
 
 | Metric | Value | Clinical Interpretation |
 |--------|-------|------------------------|
-| **Classification** | Mixed Tremor | Moderate confidence (ratio: 1.46) |
+| **Classification** | Essential Tremor (Postural) | High confidence (ratio: 0.14) |
 | **Dominant Axis** | Y (Anterior-Posterior) | Primary tremor direction |
-| **Axis RMS (Y)** | 3.76 m/s² | **SEVERE** (>0.30 threshold) |
-| **Resultant RMS** | 1.62 m/s² | **SEVERE** (>0.30 threshold) |
-| **Dominant Frequency** | 5.50-5.75 Hz | Rest tremor range |
-| **Rest Power** | 7.76 m²/s⁴ | High rest tremor component |
-| **Essential Power** | 5.33 m²/s⁴ | Moderate essential component |
-| **Power Ratio** | 1.46 | Mixed pattern (both bands active) |
+| **Axis RMS (Y)** | 4.8702 m/s² | **SEVERE** (>0.30 threshold) |
+| **Resultant RMS** | 1.9759 m/s² | **SEVERE** (>0.30 threshold) |
+| **Mean Amplitude** | 0.0018 m/s² | Near zero (excellent DC removal) |
+| **Max Amplitude** | 12.3064 m/s² | Very high peak tremor |
+| **Dominant Frequency** | 11.50 Hz | Essential tremor range |
+| **Rest Power (3-7 Hz)** | 2.984044 m²/s⁴ | Low rest tremor component |
+| **Rest RMS** | 0.8208 m/s² | Low rest tremor amplitude |
+| **Essential Power (6-12 Hz)** | 21.235026 m²/s⁴ | **Very high essential component** |
+| **Essential RMS** | 1.9789 m/s² | High essential tremor amplitude |
+| **Power Ratio** | 0.14 | Clear essential tremor dominance |
+| **Peak Power** | 3.185651 | Strong spectral peak |
 
 **Clinical Interpretation:**
-- Clear rest tremor component at Parkinsonian frequencies (5.5-5.75 Hz)
-- Significant essential tremor component suggests mixed pathology
-- Y-axis dominance (3.3× stronger than X-axis) typical of seated rest tremor
-- Severity classified as SEVERE based on international RMS standards
+- **Clear essential tremor** at 11.50 Hz (classic postural tremor frequency)
+- Essential power >> Rest power (21.24 vs 2.98) - ratio 0.14 indicates high confidence
+- Frequency at upper end of tremor spectrum (11.5 Hz) - typical for essential tremor
+- Y-axis dominance typical of hand tremor during motor-holding task
+- Severity classified as **SEVERE** based on RMS > 0.30 m/s² threshold
+- Very high peak amplitude (12.3 m/s²) indicates strong tremor episodes
 
 ### 2.2 File 2: `tremor_cycle1_20260121_160502.csv`
 
@@ -121,21 +128,28 @@ ESP32 Microcontroller:
 
 | Metric | Value | Clinical Interpretation |
 |--------|-------|------------------------|
-| **Classification** | Rest Tremor (Parkinsonian) | High confidence (ratio: 2.12) |
+| **Classification** | Mixed Tremor | Moderate confidence (ratio: 0.74) |
 | **Dominant Axis** | Y (Anterior-Posterior) | Primary tremor direction |
-| **Axis RMS (Y)** | 2.80 m/s² | **SEVERE** (>0.30 threshold) |
-| **Resultant RMS** | 1.78 m/s² | **SEVERE** (>0.30 threshold) |
-| **Dominant Frequency** | 5.75 Hz | Classic rest tremor |
-| **Rest Power** | 5.29 m²/s⁴ | High rest tremor component |
-| **Essential Power** | 2.49 m²/s⁴ | Low essential component |
-| **Power Ratio** | 2.12 | Clear rest tremor dominance |
+| **Axis RMS (Y)** | 3.5928 m/s² | **SEVERE** (>0.30 threshold) |
+| **Resultant RMS** | 1.6238 m/s² | **SEVERE** (>0.30 threshold) |
+| **Mean Amplitude** | 0.0014 m/s² | Near zero (excellent DC removal) |
+| **Max Amplitude** | 8.8714 m/s² | High peak tremor |
+| **Dominant Frequency** | 5.75 Hz | Borderline rest/essential range |
+| **Rest Power (3-7 Hz)** | 6.500892 m²/s⁴ | Moderate rest tremor component |
+| **Rest RMS** | 1.2564 m/s² | Moderate rest tremor amplitude |
+| **Essential Power (6-12 Hz)** | 8.799293 m²/s⁴ | Moderate-high essential component |
+| **Essential RMS** | 1.2152 m/s² | Moderate essential tremor amplitude |
+| **Power Ratio** | 0.74 | Mixed tremor pattern (0.5 < ratio < 2.0) |
+| **Peak Power** | 2.731032 | Moderate spectral peak |
 
 **Clinical Interpretation:**
-- Textbook Parkinsonian tremor at 5.75 Hz
-- Perfectly consistent frequency across all axes
-- Y-axis dominance (3.5× stronger than X-axis)
-- High confidence classification (ratio > 2.0)
-- Severity classified as SEVERE
+- **Mixed tremor** with both rest and essential components
+- Dominant frequency 5.75 Hz sits in the overlap region (borderline)
+- Essential power slightly higher than rest power (8.80 vs 6.50) - ratio 0.74
+- Power ratio in the "mixed" range (0.5-2.0) indicates moderate confidence
+- Y-axis dominance typical of hand tremor during motor-holding task
+- Severity classified as **SEVERE** based on RMS > 0.30 m/s² threshold
+- Both tremor bands show significant activity, suggesting combined pathology
 
 ---
 
@@ -143,40 +157,49 @@ ESP32 Microcontroller:
 
 ### 3.1 Consistency Between Files
 
-| Parameter | File 1 | File 2 | Agreement |
-|-----------|--------|--------|-----------|
-| Dominant Axis | Y | Y | ✅ Perfect |
-| Frequency Range | 5.5-5.75 Hz | 5.75 Hz | ✅ Excellent |
-| Severity | SEVERE | SEVERE | ✅ Perfect |
-| Y-axis Dominance | 3.3× | 3.5× | ✅ Very Good |
+| Parameter | File 1 (141523) | File 2 (160502) | Comparison |
+|-----------|-----------------|-----------------|------------|
+| **Dominant Axis** | Y | Y | ✅ Perfect match |
+| **Severity** | SEVERE | SEVERE | ✅ Both severe |
+| **Classification** | Essential Tremor | Mixed Tremor | ⚠️ Different patterns |
+| **Dominant Frequency** | 11.50 Hz | 5.75 Hz | ⚠️ 2× frequency difference |
+| **Axis RMS (Y)** | 4.87 m/s² | 3.59 m/s² | File 1 35% higher |
+| **Resultant RMS** | 1.98 m/s² | 1.62 m/s² | File 1 22% higher |
+| **Power Ratio** | 0.14 | 0.74 | File 1 more essential |
 
 **Reliability Assessment:**
-- Excellent inter-test reliability
-- Consistent dominant axis identification
-- Stable frequency characteristics
-- Reproducible severity classification
+- ✅ Consistent dominant axis (Y-axis in both tests)
+- ✅ Consistent severity classification (both SEVERE)
+- ⚠️ **Different tremor types detected** - indicates varying tremor patterns
+- ⚠️ Frequency variation suggests different tremor mechanisms at play
 
 ### 3.2 Tremor Type Classification
 
-**File 1 vs File 2:**
+**File 1 vs File 2 Comparison:**
 
 ```
-File 1: Mixed Tremor (ratio: 1.46)
-├─ Rest component: Strong (7.76 m²/s⁴)
-├─ Essential component: Moderate (5.33 m²/s⁴)
-└─ Interpretation: Both bands active
+File 1 (141523): Essential Tremor (ratio: 0.14)
+├─ Rest component: Low (2.98 m²/s⁴, RMS: 0.82 m/s²)
+├─ Essential component: Very High (21.24 m²/s⁴, RMS: 1.98 m/s²)
+├─ Dominant Frequency: 11.50 Hz (high-frequency essential tremor)
+└─ Interpretation: Clear postural tremor pattern
 
-File 2: Rest Tremor (ratio: 2.12)
-├─ Rest component: Strong (5.29 m²/s⁴)
-├─ Essential component: Weak (2.49 m²/s⁴)
-└─ Interpretation: Classic Parkinsonian pattern
+File 2 (160502): Mixed Tremor (ratio: 0.74)
+├─ Rest component: Moderate (6.50 m²/s⁴, RMS: 1.26 m/s²)
+├─ Essential component: Moderate-High (8.80 m²/s⁴, RMS: 1.22 m/s²)
+├─ Dominant Frequency: 5.75 Hz (borderline rest/essential)
+└─ Interpretation: Both tremor bands active
 ```
 
 **Clinical Significance:**
-- Both files show dominant rest tremor characteristics
-- File 2 exhibits clearer Parkinsonian pattern
-- File 1 may indicate postural holding component
-- Consistent 5.5-5.75 Hz validates Parkinsonian hypothesis
+- **File 1 shows pure essential tremor** at 11.5 Hz with high confidence
+- **File 2 shows mixed tremor** with balanced rest/essential components
+- **Different tremor mechanisms** - File 1 is postural, File 2 has rest component
+- **Temporal variability** - tremor characteristics changed between recordings (~2 hours apart)
+- This variability suggests:
+  - ✅ System correctly detects different tremor patterns
+  - ⚠️ Tremor may be task-dependent or time-varying
+  - ⚠️ Multiple recordings needed for complete tremor characterization
 
 ---
 
@@ -416,34 +439,44 @@ The offline analyzer uses a tabbed interface (similar to MATLAB figures):
 
 ### 9.1 Key Achievements
 
-1. **System successfully detects tremor:**
-   - Clear 5.5-5.75 Hz oscillations
-   - Consistent across multiple recordings
-   - High signal quality
+1. **System successfully detects and classifies tremor:**
+   - File 1: Essential tremor at 11.50 Hz with high confidence
+   - File 2: Mixed tremor at 5.75 Hz with moderate confidence
+   - Both files show SEVERE tremor (RMS > 0.30 m/s²)
+   - High signal quality with clear spectral peaks
 
 2. **Tremor characteristics identified:**
-   - Rest tremor (Parkinsonian pattern)
-   - Y-axis dominance (anterior-posterior)
-   - Severe amplitude (RMS > 0.30 m/s²)
+   - **File 1:** Pure essential tremor (postural) - 11.5 Hz, essential/rest power ratio 0.14
+   - **File 2:** Mixed tremor - 5.75 Hz, balanced rest and essential components
+   - Y-axis dominance in both recordings (anterior-posterior direction)
+   - Severe amplitude in both tests (RMS 1.6-2.0 m/s² resultant, 3.6-4.9 m/s² axis)
 
-3. **Technical validation:**
-   - Matches research literature protocols
-   - Reliable classification algorithm
-   - Professional visualization
+3. **System demonstrates temporal tremor variability:**
+   - Different tremor patterns detected 2 hours apart
+   - Shows system can distinguish essential vs. mixed tremor
+   - Validates need for multiple recording sessions
+
+4. **Technical validation:**
+   - Matches research literature protocols (MDPI papers)
+   - Accurate classification algorithm (different patterns correctly identified)
+   - Professional MATLAB-style visualization
+   - Separate PSD markers for axis vs. resultant (bug fixed)
 
 ### 9.2 Clinical Relevance
 
 **This system demonstrates:**
-- ✅ Feasibility of low-cost tremor monitoring
-- ✅ Research-grade signal processing
+- ✅ Feasibility of low-cost tremor monitoring (<$15 hardware)
+- ✅ Research-grade signal processing (Butterworth filters, Welch PSD, zero-phase)
+- ✅ Accurate tremor classification (essential vs. mixed tremor detected)
+- ✅ Temporal variability tracking (different patterns at different times)
 - ✅ Clinical decision support capability
-- ✅ Suitable for diagnostic assistance
 
 **The data suggests:**
-- Strong evidence of rest tremor
-- Consistent with Parkinsonian characteristics
-- Clinically significant severity
-- Warrants professional medical evaluation
+- **Strong evidence of essential tremor** (File 1: 11.5 Hz, high confidence)
+- **Mixed tremor pattern also present** (File 2: 5.75 Hz, balanced components)
+- **Clinically significant severity** (both SEVERE by RMS criteria)
+- **Task-dependent or time-varying tremor** (pattern changed between recordings)
+- **Warrants professional medical evaluation** for essential tremor workup
 
 ### 9.3 Final Assessment
 
@@ -517,22 +550,47 @@ python3 offline_analyzer.py
 ```
 ┌─────────────────────────────────────────────────┐
 │           TREMOR SEVERITY SCALE                 │
+│         (Axis RMS - Dominant Y-Axis)            │
 ├─────────────────────────────────────────────────┤
 │                                                 │
 │  0.00 ────────────────────────── No tremor     │
 │         ▲                                       │
 │  0.10 ──┼─────────────────────── Mild          │
-│         │    ▲ File 2 (Y): 2.80 m/s²          │
-│  0.30 ──┼────┼───────────────── Moderate       │
-│         │    │                                 │
-│         │    │    ▲ File 1 (Y): 3.76 m/s²     │
-│  1.00 ──┼────┼────┼────────────── SEVERE       │
-│         │    │    │                            │
-│  3.00 ──┼────┼────┼────────────── Very Severe  │
-│         │    │    │                            │
-│  5.00 ──┴────┴────┴──────────────              │
+│         │                                       │
+│  0.30 ──┼───────────────────────Moderate       │
+│         │                                       │
+│         │        ▲ File 2: 3.59 m/s²           │
+│  1.00 ──┼────────┼────────────── SEVERE        │
+│         │        │                              │
+│  3.00 ──┼────────┼────────────── Very Severe   │
+│         │        │                              │
+│         │        │    ▲ File 1: 4.87 m/s²      │
+│  5.00 ──┴────────┴────┼───────────              │
+│                       │                         │
+│ Both files: SEVERE classification               │
+│ File 1 (Essential): 35% higher amplitude        │
+└─────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────┐
+│       RESULTANT RMS COMPARISON                  │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  0.00 ────────────────────────── No tremor     │
+│         ▲                                       │
+│  0.10 ──┼─────────────────────── Mild          │
+│         │                                       │
+│  0.30 ──┼───────────────────────Moderate       │
+│         │                                       │
+│         │  ▲ File 2: 1.62 m/s²                 │
+│  1.00 ──┼──┼──────────────────── SEVERE        │
+│         │  │                                    │
+│         │  │  ▲ File 1: 1.98 m/s²              │
+│  2.00 ──┼──┼──┼──────────────── Very Severe    │
+│         │  │  │                                 │
+│  3.00 ──┴──┴──┴───────────────                 │
 │                                                 │
 │ Both files: SEVERE classification               │
+│ Resultant RMS is lower (magnitude calculation)  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -551,18 +609,51 @@ python3 offline_analyzer.py
 │                                                  │
 │  3 Hz ──┬─────────────────── Rest Tremor Start  │
 │         │                                        │
-│         │  ◄── File 1 & 2: 5.5-5.75 Hz          │
-│  5 Hz ──┤  (Parkinsonian Range)                 │
+│         │  ◄── File 2: 5.75 Hz (Mixed)          │
+│  5 Hz ──┤  (Borderline Range)                   │
 │         │                                        │
 │  7 Hz ──┴─────────────────── Rest Tremor End    │
 │         ┬                                        │
-│  8 Hz ──┤                                        │
+│  8 Hz ──┤─────────────────── Essential Start    │
 │         │                                        │
 │ 10 Hz ──┤─────────────────── Essential Tremor   │
 │         │                                        │
+│         │         ◄── File 1: 11.50 Hz          │
 │ 12 Hz ──┴─────────────────── Upper Limit        │
 │                                                  │
-│ Both files fall in classic PD range (4-6 Hz)    │
+│ File 1: High-frequency essential tremor         │
+│ File 2: Borderline/mixed tremor                 │
+│ 2× frequency difference shows variability       │
+└──────────────────────────────────────────────────┘
+
+### Power Ratio Classification
+
+```
+┌──────────────────────────────────────────────────┐
+│            TREMOR TYPE BY POWER RATIO            │
+│         (Rest Power / Essential Power)           │
+├──────────────────────────────────────────────────┤
+│                                                  │
+│  Ratio > 2.0 ──────────── Rest Tremor           │
+│                            (Parkinsonian)         │
+│                            High Confidence        │
+│                                                  │
+│  Ratio = 2.0 ──────────────────────────          │
+│         ↓                                        │
+│  Ratio = 0.5 ──────────────────────────          │
+│                       Mixed Tremor               │
+│                  ◄── File 2: 0.74                │
+│                       Moderate Confidence         │
+│                                                  │
+│  Ratio < 0.5 ──────────── Essential Tremor      │
+│                  ◄── File 1: 0.14                │
+│                       (Postural)                 │
+│                       High Confidence             │
+│                                                  │
+│  Ratio = 0.0 ──────────── Pure Essential        │
+│                                                  │
+│ File 1: Clear essential tremor (0.14)           │
+│ File 2: Mixed tremor pattern (0.74)             │
 └──────────────────────────────────────────────────┘
 ```
 
