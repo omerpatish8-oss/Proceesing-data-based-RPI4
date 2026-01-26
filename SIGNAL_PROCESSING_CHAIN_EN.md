@@ -656,4 +656,153 @@ Combined:          |    |████████████████|      
 3. **All tremor-specific filtering is done in software!**
 4. **Zero-Phase filtering preserves precise timing**
 
+---
+
+## 🎛️ Controlled Tremor Simulation for Validation
+
+### **Motor-Based Tremor Simulator** (`motor_control.py`)
+
+For algorithm validation and demonstration, the system includes a controlled motor simulator that generates tremor-like oscillations at specific frequencies.
+
+### **Hardware Setup:**
+```
+L298N Motor Driver:
+  - ENA (PWM) → GPIO 18 (Raspberry Pi)
+  - IN1 → GPIO 23
+  - IN2 → GPIO 24
+  - 12V power supply
+
+MPU6050 Sensor:
+  - Attached to motor or held by hand holding motor
+  - Measures tremor-like oscillations
+```
+
+### **Simulation Sequences:**
+
+#### **1. Rest-Dominant Tremor Sequence** (120 seconds)
+```python
+# Simulates Parkinsonian rest tremor characteristics
+# Frequency range: 4-6 Hz (within clinical 3-7 Hz band)
+
+Segments (30s each):
+  1. 4.0 Hz at 40% power  ← Low rest frequency
+  2. 5.0 Hz at 45% power  ← Mid rest frequency
+  3. 6.0 Hz at 50% power  ← High rest frequency (near overlap)
+  4. 5.0 Hz at 42% power  ← Variation (realistic fluctuation)
+
+Expected Classification: "Rest Tremor"
+Expected Dominant Frequency: ~5 Hz
+```
+
+**Purpose:**
+- Validates algorithm's ability to identify rest-band tremor (3-7 Hz)
+- Demonstrates robustness to frequency variation
+- Shows clear classification in rest tremor range
+
+#### **2. Essential Tremor Sequence** (120 seconds)
+```python
+# Simulates postural/essential tremor characteristics
+# Frequency range: 8-10 Hz (within clinical 6-12 Hz band)
+
+Segments (30s each):
+  1. 8.0 Hz at 45% power   ← Low essential frequency
+  2. 9.0 Hz at 50% power   ← Mid essential frequency
+  3. 10.0 Hz at 55% power  ← High essential frequency
+  4. 9.0 Hz at 48% power   ← Variation (realistic fluctuation)
+
+Expected Classification: "Essential Tremor"
+Expected Dominant Frequency: ~9 Hz
+```
+
+**Purpose:**
+- Validates algorithm's ability to identify essential-band tremor (6-12 Hz)
+- Demonstrates clear separation from rest tremor frequencies
+- Shows consistent classification across frequency range
+
+### **Motor Control Mechanism:**
+
+```python
+# Oscillation generation (forward-reverse cycles)
+period = 1.0 / frequency          # e.g., 5 Hz → 0.2s period
+half_period = period / 2.0         # 0.1s per direction
+
+while recording:
+    motor.forward(amplitude)       # 0.1s forward
+    time.sleep(half_period)
+    motor.reverse(amplitude)       # 0.1s reverse
+    time.sleep(half_period)
+    # Result: 5 complete cycles per second (5 Hz)
+```
+
+### **Validation Methodology:**
+
+**Phase 1 - Ground Truth Validation:**
+1. Attach MPU6050 directly to motor (rigid coupling)
+2. Run rest-dominant sequence (4-6 Hz)
+3. Verify algorithm identifies rest tremor band
+4. Run essential sequence (8-10 Hz)
+5. Verify algorithm identifies essential tremor band
+
+**Phase 2 - Biomechanical Damping Test:**
+1. Hold motor in hand with sensor on finger
+2. Run same sequences
+3. Observe effect of biological damping
+4. Document algorithm robustness to real-world conditions
+
+### **Expected PSD Results:**
+
+**Rest Sequence (4-6 Hz):**
+```
+PSD Analysis:
+  - Dominant peak: ~5 Hz
+  - Power in 3-7 Hz band: HIGH
+  - Power in 6-12 Hz band: LOW
+  - Ratio: > 2.0 → "Rest Tremor" ✓
+```
+
+**Essential Sequence (8-10 Hz):**
+```
+PSD Analysis:
+  - Dominant peak: ~9 Hz
+  - Power in 3-7 Hz band: LOW
+  - Power in 6-12 Hz band: HIGH
+  - Ratio: < 0.5 → "Essential Tremor" ✓
+```
+
+### **Clinical Significance:**
+
+✅ **Controlled validation** - Known input frequencies
+✅ **Reproducible** - Same test sequence every time
+✅ **Educational** - Clear demonstration of algorithm capabilities
+✅ **Professional** - Shows systematic validation approach
+
+⚠️ **Limitations:**
+- Motor oscillations are sinusoidal (real tremor may be more complex)
+- Biological damping differs from real pathological tremor
+- This is proof-of-concept validation, not clinical validation
+- Real patient data required for clinical accuracy claims
+
+### **Usage:**
+
+```bash
+# Interactive menu
+python3 motor_control.py
+
+# Direct sequence execution
+python3 motor_control.py rest       # Run rest-dominant sequence
+python3 motor_control.py essential  # Run essential sequence
+python3 motor_control.py test       # Hardware test
+```
+
+### **Integration with Tremor Analysis:**
+
+1. **Run motor sequence** while recording with ESP32
+2. **Analyze recorded CSV** with `offline_analyzer.py`
+3. **Verify classification** matches expected tremor type
+4. **Document results** for validation report
+
+This controlled simulation approach demonstrates the system's ability to distinguish tremor frequency bands under known conditions, providing confidence in the algorithm's clinical application.
+
+---
+
 Need clarification on any specific part?

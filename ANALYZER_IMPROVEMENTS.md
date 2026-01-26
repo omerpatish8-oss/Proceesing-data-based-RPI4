@@ -417,7 +417,181 @@ python3 offline_analyzer.py
 
 ---
 
+---
+
+## 🎯 Algorithm Validation Strategy
+
+### Motor-Based Controlled Validation
+
+The tremor analyzer can be systematically validated using the motor control system (`motor_control.py`) before clinical deployment.
+
+#### Validation Sequences
+
+**Sequence 1: Rest-Dominant Tremor (4-6 Hz)**
+```
+Purpose: Validate rest tremor band detection (3-7 Hz)
+Duration: 120 seconds
+Frequency profile:
+  - 4.0 Hz (30s) → Low rest band
+  - 5.0 Hz (30s) → Mid rest band
+  - 6.0 Hz (30s) → High rest band (near overlap)
+  - 5.0 Hz (30s) → Variation test
+
+Expected analyzer output:
+  ✓ Tremor Type: "Rest Tremor (Parkinsonian)"
+  ✓ Dominant Frequency: 4-6 Hz range
+  ✓ Power Ratio: > 2.0 (rest dominant)
+  ✓ PSD Peak: Centered in 3-7 Hz band
+```
+
+**Sequence 2: Essential Tremor (8-10 Hz)**
+```
+Purpose: Validate essential tremor band detection (6-12 Hz)
+Duration: 120 seconds
+Frequency profile:
+  - 8.0 Hz (30s) → Low essential band
+  - 9.0 Hz (30s) → Mid essential band
+  - 10.0 Hz (30s) → High essential band
+  - 9.0 Hz (30s) → Variation test
+
+Expected analyzer output:
+  ✓ Tremor Type: "Essential Tremor (Postural)"
+  ✓ Dominant Frequency: 8-10 Hz range
+  ✓ Power Ratio: < 0.5 (essential dominant)
+  ✓ PSD Peak: Centered in 6-12 Hz band
+```
+
+#### Validation Workflow
+
+**Phase 1: Ground Truth Validation**
+```bash
+# 1. Start motor in rest mode
+python3 motor_control.py rest
+
+# 2. Record with ESP32 (separate terminal)
+python3 rpi_usb_recorder_v2.py
+# Press button to start recording
+
+# 3. Analyze recorded data
+python3 offline_analyzer.py
+# Load CSV, verify "Rest Tremor" classification
+
+# 4. Repeat for essential tremor
+python3 motor_control.py essential
+# Record → Analyze → Verify "Essential Tremor"
+```
+
+**Phase 2: Robustness Testing**
+- Test with sensor directly on motor (rigid coupling)
+- Test with hand holding motor (biomechanical damping)
+- Compare classification consistency
+- Document frequency accuracy (±0.25 Hz resolution)
+
+#### Expected Validation Results
+
+**Success Criteria:**
+| Test | Motor Frequency | Expected Classification | Expected Ratio |
+|------|----------------|------------------------|----------------|
+| Rest Simulation | 4-6 Hz | Rest Tremor | > 2.0 |
+| Essential Simulation | 8-10 Hz | Essential Tremor | < 0.5 |
+| Frequency Accuracy | Known | ±0.25 Hz | N/A |
+
+**Quality Metrics:**
+- Classification accuracy: 100% on controlled inputs
+- Frequency detection: Within ±0.25 Hz (Welch resolution)
+- Repeatability: Consistent across multiple trials
+- Robustness: Functions with biomechanical damping
+
+#### Validation Report Template
+
+```
+TREMOR ANALYZER VALIDATION REPORT
+=====================================
+
+Test 1: Rest-Dominant Tremor Simulation
+  Input: 4-6 Hz motor oscillation (4 segments)
+  Recording: tremor_cycle1_YYYYMMDD_HHMMSS.csv
+
+  Results:
+    ✓ Classification: Rest Tremor
+    ✓ Dominant Frequency: 5.0 Hz
+    ✓ Power Ratio: 2.15 (>2.0 threshold)
+    ✓ PSD Peak: 5.0 Hz (within 3-7 Hz band)
+
+  Conclusion: PASS
+
+Test 2: Essential Tremor Simulation
+  Input: 8-10 Hz motor oscillation (4 segments)
+  Recording: tremor_cycle2_YYYYMMDD_HHMMSS.csv
+
+  Results:
+    ✓ Classification: Essential Tremor
+    ✓ Dominant Frequency: 9.0 Hz
+    ✓ Power Ratio: 0.42 (<0.5 threshold)
+    ✓ PSD Peak: 9.0 Hz (within 6-12 Hz band)
+
+  Conclusion: PASS
+
+Overall Assessment:
+  ✓ Algorithm correctly identifies tremor bands
+  ✓ Frequency detection accurate within 0.25 Hz
+  ✓ Classification thresholds validated
+  ✓ Ready for proof-of-concept demonstration
+
+Limitations:
+  ⚠️ Sinusoidal input (real tremor more complex)
+  ⚠️ Controlled environment (not clinical data)
+  ⚠️ Clinical validation required for medical use
+```
+
+#### Integration with Analysis Dashboard
+
+The MATLAB-style tabbed interface facilitates validation review:
+
+**Figure 1 (Metrics):**
+- Verify tremor type matches expectation
+- Check power ratio is in correct range
+- Confirm dominant axis detection
+
+**Figure 2 (Dominant Axis):**
+- Observe clean sinusoidal pattern from motor
+- Verify RMS values are reasonable
+- Check filter removes DC offset correctly
+
+**Figure 3 (Resultant Vector):**
+- Confirm magnitude calculation is correct
+- Verify envelope extraction works
+- Validate resultant RMS computation
+
+**Figure 4 (PSD Analysis):**
+- **Critical validation step!**
+- Verify PSD peak matches motor frequency
+- Confirm power concentrated in expected band
+- Check frequency resolution (0.25 Hz)
+- Validate band power integration
+
+#### Scientific Justification
+
+**Why Motor Validation is Important:**
+1. **Ground Truth:** Known input frequency
+2. **Reproducibility:** Same test every time
+3. **Systematic:** Covers both tremor bands
+4. **Professional:** Shows rigorous validation approach
+5. **Educational:** Clear demonstration for professors/reviewers
+
+**Why It's Not Sufficient Alone:**
+1. Simplified sinusoidal input (real tremor is more complex)
+2. No pathological tremor characteristics (amplitude modulation, irregularity)
+3. Motor artifact differs from biological tremor
+4. Biomechanical damping is not the same as real tissue
+
+**Conclusion:**
+Motor validation proves the **signal processing pipeline** works correctly. Clinical validation with real patients is required to prove **diagnostic accuracy**.
+
+---
+
 **File:** `offline_analyzer.py`
 **Branch:** `claude/validate-data-quality-oN7Zo`
 **Version:** v3.2 (MATLAB-style tabs)
 **Status:** Ready for clinical use and professional presentation ✅
+**Validation:** Motor simulation sequences available via `motor_control.py`
