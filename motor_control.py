@@ -295,6 +295,12 @@ def run_tremor_sequence(sequence_type="rest"):
     """
     Run automated tremor simulation sequence
 
+    Physics: F = m*ω²*r (centrifugal force)
+    - ω (angular velocity) proportional to motor RPM
+    - RPM controlled by PWM duty cycle
+    - Higher PWM → Higher RPM → Higher centrifugal force → Higher amplitude
+    - We modulate PWM at the desired frequency to create oscillating tremor
+
     Args:
         sequence_type: "rest" or "essential"
     """
@@ -322,24 +328,35 @@ def run_tremor_sequence(sequence_type="rest"):
     motor = MotorController()
 
     try:
+        # Set motor direction to forward (constant)
+        GPIO.output(motor.in1_pin, GPIO.HIGH)
+        GPIO.output(motor.in2_pin, GPIO.LOW)
+
         for i, (freq, amplitude, duration) in enumerate(segments, 1):
             period = 1.0 / freq
             half_period = period / 2.0
 
+            # PWM modulation range: from minimum speed to target amplitude
+            min_pwm = 15  # Minimum to keep motor spinning
+            max_pwm = amplitude
+
             print(f"\n📍 Segment {i}/{len(segments)}")
             print(f"   Frequency: {freq} Hz")
-            print(f"   Amplitude: {amplitude}%")
+            print(f"   Amplitude: {max_pwm}% PWM (Force ∝ PWM²)")
             print(f"   Duration: {duration}s")
-            print(f"   Period: {period:.3f}s ({half_period:.3f}s per direction)")
+            print(f"   Period: {period:.3f}s ({half_period:.3f}s per half-cycle)")
 
-            # Run oscillation for specified duration
+            # Run PWM oscillation for specified duration
             end_time = time.time() + duration
             cycles = 0
 
             while time.time() < end_time:
-                motor.forward(amplitude)
+                # Increase PWM to max (high centrifugal force)
+                motor.set_speed(max_pwm)
                 time.sleep(half_period)
-                motor.reverse(amplitude)
+
+                # Decrease PWM to min (low centrifugal force)
+                motor.set_speed(min_pwm)
                 time.sleep(half_period)
                 cycles += 1
 
@@ -358,6 +375,206 @@ def run_tremor_sequence(sequence_type="rest"):
         motor.cleanup()
 
 
+def run_validation_test():
+    """
+    Data Quality Validation Test
+
+    Purpose: Generate known inputs to validate sensor output accuracy
+
+    Test Protocol:
+    1. Frequency Sweep Test (3-12 Hz)
+       - Tests if sensor detects commanded frequency accurately
+       - Each frequency held for 30 seconds
+       - Expected: FFT peak at commanded frequency ±0.2 Hz
+
+    2. Amplitude Linearity Test (20-100% PWM at 6 Hz)
+       - Tests if sensor amplitude scales with PWM
+       - Expected: Amplitude ∝ PWM² (centrifugal force relationship)
+       - Each PWM level held for 20 seconds
+
+    3. Step Response Test
+       - Tests system dynamic response
+       - Sudden PWM changes: 20% → 80% → 40% → 80%
+       - Expected: Quick response without excessive overshoot
+
+    Total duration: ~6 minutes
+
+    Output: CSV log file with timestamp, commanded_freq, commanded_pwm
+    """
+    import csv
+    from datetime import datetime
+
+    print("\n" + "="*70)
+    print("DATA QUALITY VALIDATION TEST")
+    print("="*70)
+    print("\n⚠️  IMPORTANT:")
+    print("   1. Make sure ESP32 is recording BEFORE starting this test")
+    print("   2. Note the exact start time for synchronization")
+    print("   3. This test will generate a CSV log: validation_test_log.csv")
+    print("   4. Compare this log with sensor data for validation")
+    print("="*70)
+
+    input("\n▶️  Press Enter when ESP32 is recording and you're ready to start...")
+
+    # Create log file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"validation_test_log_{timestamp}.csv"
+
+    motor = MotorController()
+
+    # Set motor direction to forward (constant)
+    GPIO.output(motor.in1_pin, GPIO.HIGH)
+    GPIO.output(motor.in2_pin, GPIO.LOW)
+
+    try:
+        with open(log_filename, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(['timestamp', 'test_phase', 'frequency_hz', 'pwm_percent', 'duration_sec', 'notes'])
+
+            print(f"\n📝 Logging to: {log_filename}")
+            print("="*70)
+
+            # TEST 1: FREQUENCY SWEEP TEST
+            print("\n🧪 TEST 1: FREQUENCY SWEEP (3-12 Hz)")
+            print("   Purpose: Validate frequency detection accuracy")
+            print("-"*70)
+
+            test_frequencies = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # Hz
+            fixed_pwm = 60  # Fixed amplitude
+            freq_duration = 30  # seconds per frequency
+
+            for freq in test_frequencies:
+                period = 1.0 / freq
+                half_period = period / 2.0
+                min_pwm = 20
+                max_pwm = fixed_pwm
+
+                print(f"\n   📍 Testing {freq} Hz (PWM: {min_pwm}-{max_pwm}%, {freq_duration}s)")
+
+                # Log entry
+                test_start = datetime.now().isoformat()
+                csvwriter.writerow([test_start, 'frequency_sweep', freq, f'{min_pwm}-{max_pwm}', freq_duration, f'Frequency accuracy test at {freq} Hz'])
+                csvfile.flush()
+
+                # Run oscillation
+                end_time = time.time() + freq_duration
+                cycles = 0
+
+                while time.time() < end_time:
+                    motor.set_speed(max_pwm)
+                    time.sleep(half_period)
+                    motor.set_speed(min_pwm)
+                    time.sleep(half_period)
+                    cycles += 1
+
+                actual_freq = cycles / freq_duration
+                print(f"   ✅ Completed: {cycles} cycles = {actual_freq:.2f} Hz actual")
+
+                motor.stop()
+                time.sleep(1)
+
+            # TEST 2: AMPLITUDE LINEARITY TEST
+            print("\n" + "="*70)
+            print("🧪 TEST 2: AMPLITUDE LINEARITY (20-100% PWM at 6 Hz)")
+            print("   Purpose: Validate amplitude scales with PWM² (F=m*ω²*r)")
+            print("-"*70)
+
+            fixed_freq = 6.0  # Hz
+            test_pwm_levels = [20, 40, 60, 80, 100]  # % PWM
+            amp_duration = 20  # seconds per level
+
+            period = 1.0 / fixed_freq
+            half_period = period / 2.0
+
+            for max_pwm in test_pwm_levels:
+                min_pwm = 15
+
+                print(f"\n   📍 Testing PWM={max_pwm}% at {fixed_freq} Hz ({amp_duration}s)")
+                print(f"      Expected force ∝ {max_pwm}² = {max_pwm**2}")
+
+                # Log entry
+                test_start = datetime.now().isoformat()
+                csvwriter.writerow([test_start, 'amplitude_linearity', fixed_freq, f'{min_pwm}-{max_pwm}', amp_duration, f'Amplitude test at {max_pwm}% PWM'])
+                csvfile.flush()
+
+                # Run oscillation
+                end_time = time.time() + amp_duration
+                cycles = 0
+
+                while time.time() < end_time:
+                    motor.set_speed(max_pwm)
+                    time.sleep(half_period)
+                    motor.set_speed(min_pwm)
+                    time.sleep(half_period)
+                    cycles += 1
+
+                print(f"   ✅ Completed: {cycles} cycles")
+
+                motor.stop()
+                time.sleep(1)
+
+            # TEST 3: STEP RESPONSE TEST
+            print("\n" + "="*70)
+            print("🧪 TEST 3: STEP RESPONSE (Sudden PWM changes)")
+            print("   Purpose: Validate dynamic response characteristics")
+            print("-"*70)
+
+            step_sequence = [
+                (20, 5, "Low baseline"),
+                (80, 5, "High step"),
+                (40, 5, "Mid step"),
+                (80, 5, "High step again"),
+                (20, 5, "Return to baseline")
+            ]
+
+            GPIO.output(motor.in1_pin, GPIO.HIGH)
+            GPIO.output(motor.in2_pin, GPIO.LOW)
+
+            for pwm_level, duration, description in step_sequence:
+                print(f"\n   📍 Step to {pwm_level}% PWM for {duration}s ({description})")
+
+                # Log entry
+                test_start = datetime.now().isoformat()
+                csvwriter.writerow([test_start, 'step_response', 'N/A', pwm_level, duration, description])
+                csvfile.flush()
+
+                motor.set_speed(pwm_level)
+                time.sleep(duration)
+
+                print(f"   ✅ Completed")
+
+            motor.stop()
+
+            print("\n" + "="*70)
+            print("✅ VALIDATION TEST COMPLETE!")
+            print("="*70)
+            print(f"\n📄 Results logged to: {log_filename}")
+            print("\n📊 Next steps:")
+            print("   1. Retrieve sensor data from ESP32")
+            print("   2. Synchronize timestamps with this log file")
+            print("   3. Compare commanded vs measured:")
+            print("      - Frequency: Use FFT to find peak frequency")
+            print("      - Amplitude: Plot amplitude vs PWM²")
+            print("      - Step response: Measure rise time and overshoot")
+            print("\n   Expected validation criteria:")
+            print("   ✓ Frequency error < 0.2 Hz")
+            print("   ✓ Amplitude correlation R² > 0.95 with PWM²")
+            print("   ✓ Step rise time < 1 second")
+            print("="*70)
+
+    except KeyboardInterrupt:
+        print("\n\n⏹️  Validation test interrupted by user")
+
+    except Exception as e:
+        print(f"\n❌ Error during validation test: {e}")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        motor.cleanup()
+        print(f"\n✅ Log file saved: {log_filename}")
+
+
 def tremor_menu():
     """Interactive menu for tremor simulation sequences"""
     print("\n" + "="*60)
@@ -366,13 +583,14 @@ def tremor_menu():
     print("\nAvailable sequences:")
     print("  1. Rest-Dominant Tremor (4-6 Hz, 120s)")
     print("  2. Essential Tremor (8-10 Hz, 120s)")
-    print("  3. Manual motor control")
-    print("  4. Hardware test sequence")
+    print("  3. Data Quality Validation Test (~6 min)")
+    print("  4. Manual motor control")
+    print("  5. Hardware test sequence")
     print("  q. Quit")
     print("="*60)
 
     while True:
-        choice = input("\nSelect option (1-4, q): ").strip().lower()
+        choice = input("\nSelect option (1-5, q): ").strip().lower()
 
         if choice == 'q':
             print("👋 Goodbye!")
@@ -390,13 +608,16 @@ def tremor_menu():
             run_tremor_sequence("essential")
             break
         elif choice == '3':
-            manual_control()
+            run_validation_test()
             break
         elif choice == '4':
+            manual_control()
+            break
+        elif choice == '5':
             run_test_sequence()
             break
         else:
-            print("❌ Invalid choice. Please select 1-4 or q.")
+            print("❌ Invalid choice. Please select 1-5 or q.")
 
 
 if __name__ == "__main__":
@@ -415,8 +636,10 @@ if __name__ == "__main__":
             run_tremor_sequence("rest")
         elif sys.argv[1] == "essential":
             run_tremor_sequence("essential")
+        elif sys.argv[1] == "validate":
+            run_validation_test()
         else:
             print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python3 motor_control.py [test|rest|essential]")
+            print("Usage: python3 motor_control.py [test|rest|essential|validate]")
     else:
         tremor_menu()
