@@ -255,15 +255,168 @@ def manual_control():
         motor.cleanup()
 
 
+def sequence_rest_dominant():
+    """
+    Rest-dominant tremor simulation
+    Frequency range: 4-6 Hz (within clinical rest band: 3-7 Hz)
+    Duration: 120 seconds (4 segments × 30s each)
+
+    Returns:
+        list: [(frequency_Hz, amplitude_%, duration_s), ...]
+    """
+    segments = [
+        (4.0, 40, 30),  # Low rest frequency
+        (5.0, 45, 30),  # Mid rest frequency
+        (6.0, 50, 30),  # High rest frequency (near overlap)
+        (5.0, 42, 30),  # Back to mid (simulate variation)
+    ]
+    return segments
+
+
+def sequence_essential_dominant():
+    """
+    Essential tremor simulation
+    Frequency range: 8-10 Hz (within clinical essential band: 6-12 Hz)
+    Duration: 120 seconds (4 segments × 30s each)
+
+    Returns:
+        list: [(frequency_Hz, amplitude_%, duration_s), ...]
+    """
+    segments = [
+        (8.0, 45, 30),  # Low essential frequency
+        (9.0, 50, 30),  # Mid essential frequency
+        (10.0, 55, 30), # High essential frequency
+        (9.0, 48, 30),  # Back to mid (simulate variation)
+    ]
+    return segments
+
+
+def run_tremor_sequence(sequence_type="rest"):
+    """
+    Run automated tremor simulation sequence
+
+    Args:
+        sequence_type: "rest" or "essential"
+    """
+    print("\n" + "="*60)
+    print("Tremor Simulation Sequence")
+    print("="*60)
+
+    # Select sequence
+    if sequence_type == "rest":
+        segments = sequence_rest_dominant()
+        print("Sequence: REST-DOMINANT TREMOR")
+        print("Frequency range: 4-6 Hz (clinical rest band: 3-7 Hz)")
+    elif sequence_type == "essential":
+        segments = sequence_essential_dominant()
+        print("Sequence: ESSENTIAL TREMOR")
+        print("Frequency range: 8-10 Hz (clinical essential band: 6-12 Hz)")
+    else:
+        print(f"❌ Unknown sequence type: {sequence_type}")
+        return
+
+    print(f"Total duration: {sum(s[2] for s in segments)} seconds")
+    print(f"Segments: {len(segments)}")
+    print("="*60)
+
+    motor = MotorController()
+
+    try:
+        for i, (freq, amplitude, duration) in enumerate(segments, 1):
+            period = 1.0 / freq
+            half_period = period / 2.0
+
+            print(f"\n📍 Segment {i}/{len(segments)}")
+            print(f"   Frequency: {freq} Hz")
+            print(f"   Amplitude: {amplitude}%")
+            print(f"   Duration: {duration}s")
+            print(f"   Period: {period:.3f}s ({half_period:.3f}s per direction)")
+
+            # Run oscillation for specified duration
+            end_time = time.time() + duration
+            cycles = 0
+
+            while time.time() < end_time:
+                motor.forward(amplitude)
+                time.sleep(half_period)
+                motor.reverse(amplitude)
+                time.sleep(half_period)
+                cycles += 1
+
+            print(f"   ✅ Completed {cycles} cycles ({cycles/duration:.2f} Hz measured)")
+            motor.stop()
+            time.sleep(0.5)  # Brief pause between segments
+
+        print("\n" + "="*60)
+        print("✅ Tremor sequence complete!")
+        print("="*60)
+
+    except KeyboardInterrupt:
+        print("\n\n⏹️  Sequence interrupted by user")
+
+    finally:
+        motor.cleanup()
+
+
+def tremor_menu():
+    """Interactive menu for tremor simulation sequences"""
+    print("\n" + "="*60)
+    print("Tremor Simulation Menu")
+    print("="*60)
+    print("\nAvailable sequences:")
+    print("  1. Rest-Dominant Tremor (4-6 Hz, 120s)")
+    print("  2. Essential Tremor (8-10 Hz, 120s)")
+    print("  3. Manual motor control")
+    print("  4. Hardware test sequence")
+    print("  q. Quit")
+    print("="*60)
+
+    while True:
+        choice = input("\nSelect option (1-4, q): ").strip().lower()
+
+        if choice == 'q':
+            print("👋 Goodbye!")
+            break
+        elif choice == '1':
+            print("\n🎯 Starting REST-DOMINANT tremor sequence...")
+            print("⚠️  Make sure ESP32 is recording before starting!")
+            input("Press Enter when ready to start...")
+            run_tremor_sequence("rest")
+            break
+        elif choice == '2':
+            print("\n🎯 Starting ESSENTIAL tremor sequence...")
+            print("⚠️  Make sure ESP32 is recording before starting!")
+            input("Press Enter when ready to start...")
+            run_tremor_sequence("essential")
+            break
+        elif choice == '3':
+            manual_control()
+            break
+        elif choice == '4':
+            run_test_sequence()
+            break
+        else:
+            print("❌ Invalid choice. Please select 1-4 or q.")
+
+
 if __name__ == "__main__":
     import sys
 
     print("\n╔════════════════════════════════════╗")
     print("║ L298N Motor Controller             ║")
     print("║ Raspberry Pi 4                     ║")
+    print("║ Tremor Simulation System           ║")
     print("╚════════════════════════════════════╝")
 
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        run_test_sequence()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "test":
+            run_test_sequence()
+        elif sys.argv[1] == "rest":
+            run_tremor_sequence("rest")
+        elif sys.argv[1] == "essential":
+            run_tremor_sequence("essential")
+        else:
+            print(f"Unknown argument: {sys.argv[1]}")
+            print("Usage: python3 motor_control.py [test|rest|essential]")
     else:
-        manual_control()
+        tremor_menu()
