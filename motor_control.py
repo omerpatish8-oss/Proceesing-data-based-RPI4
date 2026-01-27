@@ -375,204 +375,238 @@ def run_tremor_sequence(sequence_type="rest"):
         motor.cleanup()
 
 
-def run_validation_test():
+def run_tremor_with_validation():
     """
-    Data Quality Validation Test
+    Run tremor simulation and validate with PSD analysis
 
-    Purpose: Generate known inputs to validate sensor output accuracy
-
-    Test Protocol:
-    1. Frequency Sweep Test (3-12 Hz)
-       - Tests if sensor detects commanded frequency accurately
-       - Each frequency held for 30 seconds
-       - Expected: FFT peak at commanded frequency ±0.2 Hz
-
-    2. Amplitude Linearity Test (20-100% PWM at 6 Hz)
-       - Tests if sensor amplitude scales with PWM
-       - Expected: Amplitude ∝ PWM² (centrifugal force relationship)
-       - Each PWM level held for 20 seconds
-
-    3. Step Response Test
-       - Tests system dynamic response
-       - Sudden PWM changes: 20% → 80% → 40% → 80%
-       - Expected: Quick response without excessive overshoot
-
-    Total duration: ~6 minutes
-
-    Output: CSV log file with timestamp, commanded_freq, commanded_pwm
+    Flow:
+    1. Ask user for frequency range (rest: 4-6 Hz or essential: 8-10 Hz)
+    2. Run motor simulation
+    3. Ask user for sensor data CSV file
+    4. Perform PSD analysis
+    5. Check if power density peaks fall within expected frequency range
+    6. Display results with pass/fail and deviation if failed
     """
     import csv
-    from datetime import datetime
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import signal
+    import os
 
     print("\n" + "="*70)
-    print("DATA QUALITY VALIDATION TEST")
-    print("="*70)
-    print("\n⚠️  IMPORTANT:")
-    print("   1. Make sure ESP32 is recording BEFORE starting this test")
-    print("   2. Note the exact start time for synchronization")
-    print("   3. This test will generate a CSV log: validation_test_log.csv")
-    print("   4. Compare this log with sensor data for validation")
+    print("TREMOR SIMULATION WITH DATA VALIDATION")
     print("="*70)
 
-    input("\n▶️  Press Enter when ESP32 is recording and you're ready to start...")
+    # Step 1: Select frequency range
+    print("\nSelect tremor type to simulate:")
+    print("  1. REST tremor (4-6 Hz)")
+    print("  2. ESSENTIAL tremor (8-10 Hz)")
+    print("  3. CUSTOM range")
 
-    # Create log file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"validation_test_log_{timestamp}.csv"
+    choice = input("\nEnter choice (1-3): ").strip()
 
+    if choice == '1':
+        freq_min, freq_max = 4.0, 6.0
+        tremor_type = "REST"
+        # Use middle frequency for simulation
+        target_freq = 5.0
+        pwm_amplitude = 45
+    elif choice == '2':
+        freq_min, freq_max = 8.0, 10.0
+        tremor_type = "ESSENTIAL"
+        target_freq = 9.0
+        pwm_amplitude = 50
+    elif choice == '3':
+        freq_min = float(input("Enter minimum frequency (Hz): "))
+        freq_max = float(input("Enter maximum frequency (Hz): "))
+        tremor_type = "CUSTOM"
+        target_freq = (freq_min + freq_max) / 2
+        pwm_amplitude = 50
+    else:
+        print("❌ Invalid choice")
+        return
+
+    print(f"\n✅ Selected: {tremor_type} tremor ({freq_min}-{freq_max} Hz)")
+    print(f"   Target frequency: {target_freq} Hz")
+    print(f"   PWM amplitude: {pwm_amplitude}%")
+
+    # Step 2: Run motor
+    print("\n⚠️  Make sure ESP32 is recording BEFORE starting!")
+    input("Press Enter when ready to start motor...")
+
+    duration = 120  # seconds
     motor = MotorController()
 
-    # Set motor direction to forward (constant)
-    GPIO.output(motor.in1_pin, GPIO.HIGH)
-    GPIO.output(motor.in2_pin, GPIO.LOW)
-
     try:
-        with open(log_filename, 'w', newline='') as csvfile:
-            csvwriter = csv.writer(csvfile)
-            csvwriter.writerow(['timestamp', 'test_phase', 'frequency_hz', 'pwm_percent', 'duration_sec', 'notes'])
+        # Set motor direction to forward (constant)
+        GPIO.output(motor.in1_pin, GPIO.HIGH)
+        GPIO.output(motor.in2_pin, GPIO.LOW)
 
-            print(f"\n📝 Logging to: {log_filename}")
-            print("="*70)
+        period = 1.0 / target_freq
+        half_period = period / 2.0
+        min_pwm = 15
+        max_pwm = pwm_amplitude
 
-            # TEST 1: FREQUENCY SWEEP TEST
-            print("\n🧪 TEST 1: FREQUENCY SWEEP (3-12 Hz)")
-            print("   Purpose: Validate frequency detection accuracy")
-            print("-"*70)
+        print(f"\n▶️  Running motor at {target_freq} Hz for {duration}s...")
+        print(f"   PWM range: {min_pwm}-{max_pwm}%")
 
-            test_frequencies = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # Hz
-            fixed_pwm = 60  # Fixed amplitude
-            freq_duration = 30  # seconds per frequency
+        end_time = time.time() + duration
+        cycles = 0
 
-            for freq in test_frequencies:
-                period = 1.0 / freq
-                half_period = period / 2.0
-                min_pwm = 20
-                max_pwm = fixed_pwm
+        while time.time() < end_time:
+            motor.set_speed(max_pwm)
+            time.sleep(half_period)
+            motor.set_speed(min_pwm)
+            time.sleep(half_period)
+            cycles += 1
 
-                print(f"\n   📍 Testing {freq} Hz (PWM: {min_pwm}-{max_pwm}%, {freq_duration}s)")
-
-                # Log entry
-                test_start = datetime.now().isoformat()
-                csvwriter.writerow([test_start, 'frequency_sweep', freq, f'{min_pwm}-{max_pwm}', freq_duration, f'Frequency accuracy test at {freq} Hz'])
-                csvfile.flush()
-
-                # Run oscillation
-                end_time = time.time() + freq_duration
-                cycles = 0
-
-                while time.time() < end_time:
-                    motor.set_speed(max_pwm)
-                    time.sleep(half_period)
-                    motor.set_speed(min_pwm)
-                    time.sleep(half_period)
-                    cycles += 1
-
-                actual_freq = cycles / freq_duration
-                print(f"   ✅ Completed: {cycles} cycles = {actual_freq:.2f} Hz actual")
-
-                motor.stop()
-                time.sleep(1)
-
-            # TEST 2: AMPLITUDE LINEARITY TEST
-            print("\n" + "="*70)
-            print("🧪 TEST 2: AMPLITUDE LINEARITY (20-100% PWM at 6 Hz)")
-            print("   Purpose: Validate amplitude scales with PWM² (F=m*ω²*r)")
-            print("-"*70)
-
-            fixed_freq = 6.0  # Hz
-            test_pwm_levels = [20, 40, 60, 80, 100]  # % PWM
-            amp_duration = 20  # seconds per level
-
-            period = 1.0 / fixed_freq
-            half_period = period / 2.0
-
-            for max_pwm in test_pwm_levels:
-                min_pwm = 15
-
-                print(f"\n   📍 Testing PWM={max_pwm}% at {fixed_freq} Hz ({amp_duration}s)")
-                print(f"      Expected force ∝ {max_pwm}² = {max_pwm**2}")
-
-                # Log entry
-                test_start = datetime.now().isoformat()
-                csvwriter.writerow([test_start, 'amplitude_linearity', fixed_freq, f'{min_pwm}-{max_pwm}', amp_duration, f'Amplitude test at {max_pwm}% PWM'])
-                csvfile.flush()
-
-                # Run oscillation
-                end_time = time.time() + amp_duration
-                cycles = 0
-
-                while time.time() < end_time:
-                    motor.set_speed(max_pwm)
-                    time.sleep(half_period)
-                    motor.set_speed(min_pwm)
-                    time.sleep(half_period)
-                    cycles += 1
-
-                print(f"   ✅ Completed: {cycles} cycles")
-
-                motor.stop()
-                time.sleep(1)
-
-            # TEST 3: STEP RESPONSE TEST
-            print("\n" + "="*70)
-            print("🧪 TEST 3: STEP RESPONSE (Sudden PWM changes)")
-            print("   Purpose: Validate dynamic response characteristics")
-            print("-"*70)
-
-            step_sequence = [
-                (20, 5, "Low baseline"),
-                (80, 5, "High step"),
-                (40, 5, "Mid step"),
-                (80, 5, "High step again"),
-                (20, 5, "Return to baseline")
-            ]
-
-            GPIO.output(motor.in1_pin, GPIO.HIGH)
-            GPIO.output(motor.in2_pin, GPIO.LOW)
-
-            for pwm_level, duration, description in step_sequence:
-                print(f"\n   📍 Step to {pwm_level}% PWM for {duration}s ({description})")
-
-                # Log entry
-                test_start = datetime.now().isoformat()
-                csvwriter.writerow([test_start, 'step_response', 'N/A', pwm_level, duration, description])
-                csvfile.flush()
-
-                motor.set_speed(pwm_level)
-                time.sleep(duration)
-
-                print(f"   ✅ Completed")
-
-            motor.stop()
-
-            print("\n" + "="*70)
-            print("✅ VALIDATION TEST COMPLETE!")
-            print("="*70)
-            print(f"\n📄 Results logged to: {log_filename}")
-            print("\n📊 Next steps:")
-            print("   1. Retrieve sensor data from ESP32")
-            print("   2. Synchronize timestamps with this log file")
-            print("   3. Compare commanded vs measured:")
-            print("      - Frequency: Use FFT to find peak frequency")
-            print("      - Amplitude: Plot amplitude vs PWM²")
-            print("      - Step response: Measure rise time and overshoot")
-            print("\n   Expected validation criteria:")
-            print("   ✓ Frequency error < 0.2 Hz")
-            print("   ✓ Amplitude correlation R² > 0.95 with PWM²")
-            print("   ✓ Step rise time < 1 second")
-            print("="*70)
+        actual_freq = cycles / duration
+        print(f"✅ Motor run complete: {cycles} cycles ({actual_freq:.2f} Hz actual)")
+        motor.stop()
 
     except KeyboardInterrupt:
-        print("\n\n⏹️  Validation test interrupted by user")
-
-    except Exception as e:
-        print(f"\n❌ Error during validation test: {e}")
-        import traceback
-        traceback.print_exc()
-
+        print("\n⏹️  Motor run interrupted")
+        motor.stop()
+        return
     finally:
         motor.cleanup()
-        print(f"\n✅ Log file saved: {log_filename}")
+
+    # Step 3: Load sensor data
+    print("\n" + "="*70)
+    print("DATA ANALYSIS")
+    print("="*70)
+
+    csv_file = input("\nEnter sensor data CSV filename: ").strip()
+
+    if not os.path.exists(csv_file):
+        print(f"❌ File not found: {csv_file}")
+        return
+
+    # Load CSV data
+    print(f"📂 Loading {csv_file}...")
+    timestamps = []
+    accel_x = []
+
+    try:
+        with open(csv_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('Timestamp', '').startswith('#'):
+                    continue
+                try:
+                    timestamps.append(int(row['Timestamp']))
+                    accel_x.append(float(row['Ax']))
+                except (ValueError, KeyError):
+                    continue
+
+        print(f"✅ Loaded {len(accel_x)} samples")
+
+    except Exception as e:
+        print(f"❌ Error loading CSV: {e}")
+        return
+
+    if len(accel_x) < 100:
+        print("❌ Not enough data for analysis")
+        return
+
+    # Step 4: PSD Analysis
+    print("\n📊 Performing Power Spectral Density (PSD) analysis...")
+
+    # Convert to numpy array
+    signal_data = np.array(accel_x)
+
+    # Remove DC component
+    signal_data = signal_data - np.mean(signal_data)
+
+    # Sampling rate (from README: 100 Hz)
+    fs = 100  # Hz
+
+    # Compute PSD using Welch's method
+    freqs, psd = signal.welch(signal_data, fs=fs, nperseg=1024)
+
+    # Find frequency range of interest (0-15 Hz for tremor)
+    freq_mask = (freqs >= 0) & (freqs <= 15)
+    freqs_tremor = freqs[freq_mask]
+    psd_tremor = psd[freq_mask]
+
+    # Find peak frequency in the expected range
+    range_mask = (freqs >= freq_min) & (freqs <= freq_max)
+    freqs_in_range = freqs[range_mask]
+    psd_in_range = psd[range_mask]
+
+    # Find global peak in tremor range (0-15 Hz)
+    peak_idx_global = np.argmax(psd_tremor)
+    peak_freq_global = freqs_tremor[peak_idx_global]
+    peak_power_global = psd_tremor[peak_idx_global]
+
+    # Find peak in expected range
+    if len(psd_in_range) > 0:
+        peak_idx_in_range = np.argmax(psd_in_range)
+        peak_freq_in_range = freqs_in_range[peak_idx_in_range]
+        peak_power_in_range = psd_in_range[peak_idx_in_range]
+    else:
+        peak_freq_in_range = None
+        peak_power_in_range = 0
+
+    # Step 5: Validation
+    print("\n" + "="*70)
+    print("VALIDATION RESULTS")
+    print("="*70)
+
+    print(f"\nExpected range: {freq_min}-{freq_max} Hz")
+    print(f"Global peak: {peak_freq_global:.2f} Hz (power: {peak_power_global:.2e})")
+
+    # Check if global peak is in range
+    in_range = (peak_freq_global >= freq_min) and (peak_freq_global <= freq_max)
+
+    if in_range:
+        print(f"\n✅ SUCCESS - Peak frequency {peak_freq_global:.2f} Hz is within range!")
+        deviation = 0
+    else:
+        if peak_freq_global < freq_min:
+            deviation = freq_min - peak_freq_global
+            print(f"\n❌ FAILURE - Peak frequency {peak_freq_global:.2f} Hz is BELOW range")
+            print(f"   Deviation: -{deviation:.2f} Hz (too low)")
+        else:
+            deviation = peak_freq_global - freq_max
+            print(f"\n❌ FAILURE - Peak frequency {peak_freq_global:.2f} Hz is ABOVE range")
+            print(f"   Deviation: +{deviation:.2f} Hz (too high)")
+
+    # Step 6: Plot PSD
+    print("\n📊 Generating PSD plot...")
+
+    plt.figure(figsize=(12, 6))
+
+    # Plot PSD
+    plt.plot(freqs_tremor, psd_tremor, 'b-', linewidth=1.5, label='PSD')
+
+    # Mark expected range
+    plt.axvspan(freq_min, freq_max, alpha=0.3, color='green' if in_range else 'red',
+                label=f'Expected range ({freq_min}-{freq_max} Hz)')
+
+    # Mark peak
+    plt.plot(peak_freq_global, peak_power_global, 'ro', markersize=10,
+             label=f'Peak: {peak_freq_global:.2f} Hz')
+
+    plt.xlabel('Frequency (Hz)', fontsize=12)
+    plt.ylabel('Power Spectral Density', fontsize=12)
+    plt.title(f'Tremor Validation - {tremor_type} ({freq_min}-{freq_max} Hz)\n' +
+              ('✅ PASS' if in_range else f'❌ FAIL (deviation: {abs(deviation):.2f} Hz)'),
+              fontsize=14, fontweight='bold')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.xlim(0, 15)
+
+    # Save plot
+    plot_filename = f"tremor_validation_{tremor_type.lower()}.png"
+    plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
+    print(f"✅ Plot saved: {plot_filename}")
+
+    plt.show()
+
+    print("\n" + "="*70)
+    print("ANALYSIS COMPLETE")
+    print("="*70)
 
 
 def tremor_menu():
@@ -580,10 +614,10 @@ def tremor_menu():
     print("\n" + "="*60)
     print("Tremor Simulation Menu")
     print("="*60)
-    print("\nAvailable sequences:")
+    print("\nAvailable options:")
     print("  1. Rest-Dominant Tremor (4-6 Hz, 120s)")
     print("  2. Essential Tremor (8-10 Hz, 120s)")
-    print("  3. Data Quality Validation Test (~6 min)")
+    print("  3. Tremor with PSD Validation (recommended)")
     print("  4. Manual motor control")
     print("  5. Hardware test sequence")
     print("  q. Quit")
@@ -608,7 +642,7 @@ def tremor_menu():
             run_tremor_sequence("essential")
             break
         elif choice == '3':
-            run_validation_test()
+            run_tremor_with_validation()
             break
         elif choice == '4':
             manual_control()
@@ -637,7 +671,7 @@ if __name__ == "__main__":
         elif sys.argv[1] == "essential":
             run_tremor_sequence("essential")
         elif sys.argv[1] == "validate":
-            run_validation_test()
+            run_tremor_with_validation()
         else:
             print(f"Unknown argument: {sys.argv[1]}")
             print("Usage: python3 motor_control.py [test|rest|essential|validate]")
