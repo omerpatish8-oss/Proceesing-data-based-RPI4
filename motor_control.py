@@ -21,6 +21,12 @@ IN2_PIN = 24  # Direction control 2
 # PWM Configuration
 PWM_FREQUENCY = 1000  # 1 kHz (good for most DC motors)
 
+# Motor Specifications (12V DC Gearbox Motor)
+MAX_RPM = 625           # Maximum RPM at 12V (100% PWM)
+MAX_HZ = MAX_RPM / 60   # Maximum Hz = 10.42 Hz
+ECCENTRIC_MASS_G = 38   # Eccentric mass in grams
+MIN_PWM_THRESHOLD = 15  # Minimum PWM% for motor to spin
+
 class MotorController:
     """L298N Motor Driver Controller"""
 
@@ -196,6 +202,225 @@ def run_test_sequence():
         print("\n\n⏹️  Test interrupted by user")
 
     finally:
+        motor.cleanup()
+
+
+def hz_to_pwm(hz):
+    """
+    Convert target frequency (Hz) to PWM percentage
+
+    Formula: PWM% = (Hz / MAX_HZ) * 100
+
+    Args:
+        hz: Target frequency in Hz (rotations per second)
+
+    Returns:
+        PWM percentage (clamped to MIN_PWM_THRESHOLD - 100)
+    """
+    if hz <= 0:
+        return 0
+    if hz > MAX_HZ:
+        print(f"Warning: {hz} Hz exceeds max {MAX_HZ:.1f} Hz, clamping to max")
+        hz = MAX_HZ
+
+    pwm = (hz / MAX_HZ) * 100
+
+    if pwm < MIN_PWM_THRESHOLD:
+        print(f"Warning: {pwm:.1f}% below minimum {MIN_PWM_THRESHOLD}%, motor may not spin")
+
+    return max(MIN_PWM_THRESHOLD, min(100, pwm))
+
+
+def pwm_to_hz(pwm):
+    """
+    Convert PWM percentage to frequency (Hz)
+
+    Formula: Hz = (PWM% / 100) * MAX_HZ
+
+    Args:
+        pwm: PWM percentage (0-100)
+
+    Returns:
+        Frequency in Hz
+    """
+    return (pwm / 100) * MAX_HZ
+
+
+def rpm_control():
+    """
+    Interactive RPM/Hz control mode
+    User can set exact rotation frequency
+    """
+    print("\n" + "="*60)
+    print("RPM/Hz Control Mode")
+    print("="*60)
+    print(f"\nMotor Specs:")
+    print(f"  Max RPM: {MAX_RPM}")
+    print(f"  Max Hz:  {MAX_HZ:.2f}")
+    print(f"  Eccentric Mass: {ECCENTRIC_MASS_G}g")
+    print("\nCommands:")
+    print("  hz <value>   - Set frequency (e.g., 'hz 5' for 5 Hz)")
+    print("  rpm <value>  - Set RPM (e.g., 'rpm 300' for 300 RPM)")
+    print("  pwm <value>  - Set PWM directly (e.g., 'pwm 50')")
+    print("  stop         - Stop motor")
+    print("  quit         - Exit")
+    print("="*60)
+
+    motor = MotorController()
+
+    try:
+        # Set direction forward
+        GPIO.output(motor.in1_pin, GPIO.HIGH)
+        GPIO.output(motor.in2_pin, GPIO.LOW)
+
+        while True:
+            cmd = input("\n> ").strip().lower().split()
+
+            if not cmd:
+                continue
+
+            if cmd[0] in ['q', 'quit', 'exit']:
+                break
+
+            elif cmd[0] == 'hz':
+                if len(cmd) < 2:
+                    print("Usage: hz <value>")
+                    continue
+                target_hz = float(cmd[1])
+                pwm = hz_to_pwm(target_hz)
+                motor.set_speed(pwm)
+                actual_hz = pwm_to_hz(pwm)
+                print(f"   Target: {target_hz} Hz")
+                print(f"   PWM:    {pwm:.1f}%")
+                print(f"   Actual: {actual_hz:.2f} Hz ({actual_hz*60:.0f} RPM)")
+
+            elif cmd[0] == 'rpm':
+                if len(cmd) < 2:
+                    print("Usage: rpm <value>")
+                    continue
+                target_rpm = float(cmd[1])
+                target_hz = target_rpm / 60
+                pwm = hz_to_pwm(target_hz)
+                motor.set_speed(pwm)
+                actual_hz = pwm_to_hz(pwm)
+                print(f"   Target: {target_rpm} RPM ({target_hz:.2f} Hz)")
+                print(f"   PWM:    {pwm:.1f}%")
+                print(f"   Actual: {actual_hz*60:.0f} RPM ({actual_hz:.2f} Hz)")
+
+            elif cmd[0] == 'pwm':
+                if len(cmd) < 2:
+                    print("Usage: pwm <value>")
+                    continue
+                pwm = float(cmd[1])
+                motor.set_speed(pwm)
+                actual_hz = pwm_to_hz(pwm)
+                print(f"   PWM:    {pwm:.1f}%")
+                print(f"   Speed:  {actual_hz:.2f} Hz ({actual_hz*60:.0f} RPM)")
+
+            elif cmd[0] in ['stop', 's']:
+                motor.stop()
+                print("   Motor stopped")
+
+            else:
+                print("Unknown command. Use: hz, rpm, pwm, stop, quit")
+
+    except KeyboardInterrupt:
+        print("\n\nInterrupted")
+
+    finally:
+        motor.cleanup()
+
+
+def custom_sequence():
+    """
+    Run a custom sequence of frequencies
+    User defines: [(Hz, duration_sec), ...]
+    """
+    print("\n" + "="*60)
+    print("Custom Frequency Sequence")
+    print("="*60)
+    print(f"\nMotor: Max {MAX_HZ:.1f} Hz ({MAX_RPM} RPM)")
+    print("\nEnter sequence as: Hz,seconds (one per line)")
+    print("Example:")
+    print("  4,10    <- 4 Hz for 10 seconds")
+    print("  6,10    <- 6 Hz for 10 seconds")
+    print("Type 'run' to start, 'quit' to exit")
+    print("="*60)
+
+    sequence = []
+
+    while True:
+        line = input("\n> ").strip().lower()
+
+        if line == 'quit':
+            return
+
+        if line == 'run':
+            if not sequence:
+                print("No sequence defined!")
+                continue
+            break
+
+        if line == 'clear':
+            sequence = []
+            print("Sequence cleared")
+            continue
+
+        if line == 'show':
+            if sequence:
+                print("\nCurrent sequence:")
+                for i, (hz, dur) in enumerate(sequence, 1):
+                    pwm = hz_to_pwm(hz)
+                    print(f"  {i}. {hz} Hz ({hz*60:.0f} RPM) for {dur}s [PWM: {pwm:.1f}%]")
+            else:
+                print("Sequence is empty")
+            continue
+
+        try:
+            parts = line.split(',')
+            hz = float(parts[0])
+            duration = float(parts[1]) if len(parts) > 1 else 10
+
+            if hz > MAX_HZ:
+                print(f"Warning: {hz} Hz exceeds max {MAX_HZ:.1f} Hz")
+
+            sequence.append((hz, duration))
+            pwm = hz_to_pwm(hz)
+            print(f"   Added: {hz} Hz for {duration}s [PWM: {pwm:.1f}%]")
+
+        except (ValueError, IndexError):
+            print("Invalid format. Use: Hz,seconds (e.g., 4,10)")
+
+    # Run the sequence
+    print("\n" + "="*60)
+    print("Running sequence...")
+    print("="*60)
+
+    motor = MotorController()
+
+    try:
+        GPIO.output(motor.in1_pin, GPIO.HIGH)
+        GPIO.output(motor.in2_pin, GPIO.LOW)
+
+        for i, (hz, duration) in enumerate(sequence, 1):
+            pwm = hz_to_pwm(hz)
+            rpm = hz * 60
+
+            print(f"\nStep {i}/{len(sequence)}: {hz} Hz ({rpm:.0f} RPM) for {duration}s")
+            print(f"   PWM: {pwm:.1f}%")
+
+            motor.set_speed(pwm)
+            time.sleep(duration)
+
+        print("\n" + "="*60)
+        print("Sequence complete!")
+        print("="*60)
+
+    except KeyboardInterrupt:
+        print("\n\nSequence interrupted")
+
+    finally:
+        motor.stop()
         motor.cleanup()
 
 
@@ -614,30 +839,33 @@ def tremor_menu():
     print("\n" + "="*60)
     print("Tremor Simulation Menu")
     print("="*60)
+    print(f"\nMotor: {MAX_RPM} RPM max ({MAX_HZ:.1f} Hz), {ECCENTRIC_MASS_G}g eccentric mass")
     print("\nAvailable options:")
     print("  1. Rest-Dominant Tremor (4-6 Hz, 120s)")
     print("  2. Essential Tremor (8-10 Hz, 120s)")
-    print("  3. Tremor with PSD Validation (recommended)")
-    print("  4. Manual motor control")
-    print("  5. Hardware test sequence")
+    print("  3. Tremor with PSD Validation")
+    print("  4. Manual motor control (PWM)")
+    print("  5. RPM/Hz Control (set exact speed)")
+    print("  6. Custom Sequence (define your own)")
+    print("  7. Hardware test sequence")
     print("  q. Quit")
     print("="*60)
 
     while True:
-        choice = input("\nSelect option (1-5, q): ").strip().lower()
+        choice = input("\nSelect option (1-7, q): ").strip().lower()
 
         if choice == 'q':
-            print("👋 Goodbye!")
+            print("Goodbye!")
             break
         elif choice == '1':
-            print("\n🎯 Starting REST-DOMINANT tremor sequence...")
-            print("⚠️  Make sure ESP32 is recording before starting!")
+            print("\nStarting REST-DOMINANT tremor sequence...")
+            print("Make sure ESP32 is recording before starting!")
             input("Press Enter when ready to start...")
             run_tremor_sequence("rest")
             break
         elif choice == '2':
-            print("\n🎯 Starting ESSENTIAL tremor sequence...")
-            print("⚠️  Make sure ESP32 is recording before starting!")
+            print("\nStarting ESSENTIAL tremor sequence...")
+            print("Make sure ESP32 is recording before starting!")
             input("Press Enter when ready to start...")
             run_tremor_sequence("essential")
             break
@@ -648,10 +876,16 @@ def tremor_menu():
             manual_control()
             break
         elif choice == '5':
+            rpm_control()
+            break
+        elif choice == '6':
+            custom_sequence()
+            break
+        elif choice == '7':
             run_test_sequence()
             break
         else:
-            print("❌ Invalid choice. Please select 1-5 or q.")
+            print("Invalid choice. Please select 1-7 or q.")
 
 
 if __name__ == "__main__":
