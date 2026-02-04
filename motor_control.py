@@ -36,7 +36,7 @@ PWM_FREQUENCY = 1000  # 1 kHz carrier frequency (not motor speed!)
 # Motor Specifications (12V DC Gearbox Motor with eccentric mass)
 MAX_RPM = 625           # Maximum RPM at 12V (100% duty cycle)
 MAX_HZ = MAX_RPM / 60   # Maximum rotations per second = 10.42 Hz
-ECCENTRIC_MASS_G = 38   # Eccentric mass in grams
+ECCENTRIC_MASS_G = 40   # Eccentric mass in grams
 MIN_DUTY_CYCLE = 15     # Minimum duty cycle for motor to start spinning
 
 
