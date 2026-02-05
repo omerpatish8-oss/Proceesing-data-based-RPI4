@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Rest Tremor Analysis Tool - Research-Based Implementation
-Focused on rest tremor (3-7 Hz) detection using accelerometer data.
+Focused on rest tremor (3-7 Hz) detection using resultant vector magnitude.
 Bandpass filter: 2-8 Hz (avoids edge attenuation at 3 and 7 Hz).
 Validation: user enters expected frequency range, system checks PSD peak.
 Based on MDPI papers: Parkinson's tremor assessment with MPU6050 + ESP32
@@ -41,9 +41,6 @@ FREQ_TOLERANCE_HZ = 0.5 # Acceptable deviation from expected frequency
 # Visual styling
 COL_RAW = '#2F4F4F'         # Dark Slate Gray - Raw signal
 COL_FILTERED = '#FF6347'    # Tomato - Filtered signal
-COL_X = '#E74C3C'           # Red - X axis
-COL_Y = '#808080'           # Gray - Y axis
-COL_Z = '#3498DB'           # Blue - Z axis
 COL_PASS = '#2ECC71'        # Green - Validation pass
 COL_FAIL = '#E74C3C'        # Red - Validation fail
 
@@ -159,16 +156,16 @@ class TremorAnalyzerResearch:
         self.canvases.append(canvas1)
         self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase, self.ax_metrics])
 
-        # ==================== FIGURE 2: DOMINANT AXIS ANALYSIS ====================
+        # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS ====================
         fig2_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig2_frame, text="Figure 2 - Dominant Axis")
+        self.notebook.add(fig2_frame, text="Figure 2 - Resultant Vector")
 
         self.fig2 = plt.figure(figsize=(15, 4))
         gs2 = GridSpec(1, 3, figure=self.fig2, hspace=0.3, wspace=0.3)
 
-        self.ax_axis_raw = self.fig2.add_subplot(gs2[0, 0])
-        self.ax_axis_filtered = self.fig2.add_subplot(gs2[0, 1])
-        self.ax_axis_overlay = self.fig2.add_subplot(gs2[0, 2])
+        self.ax_result_raw = self.fig2.add_subplot(gs2[0, 0])
+        self.ax_result_filtered = self.fig2.add_subplot(gs2[0, 1])
+        self.ax_result_overlay = self.fig2.add_subplot(gs2[0, 2])
 
         canvas2 = FigureCanvasTkAgg(self.fig2, master=fig2_frame)
         canvas2.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -177,18 +174,18 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig2)
         self.canvases.append(canvas2)
-        self.all_axes.extend([self.ax_axis_raw, self.ax_axis_filtered, self.ax_axis_overlay])
+        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay])
 
-        # ==================== FIGURE 3: RESULTANT VECTOR ANALYSIS ====================
+        # ==================== FIGURE 3: PSD ANALYSIS ====================
         fig3_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig3_frame, text="Figure 3 - Resultant Vector")
+        self.notebook.add(fig3_frame, text="Figure 3 - PSD Analysis")
 
         self.fig3 = plt.figure(figsize=(15, 4))
         gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.3)
 
-        self.ax_result_raw = self.fig3.add_subplot(gs3[0, 0])
-        self.ax_result_filtered = self.fig3.add_subplot(gs3[0, 1])
-        self.ax_result_overlay = self.fig3.add_subplot(gs3[0, 2])
+        self.ax_psd_full = self.fig3.add_subplot(gs3[0, 0])
+        self.ax_psd_zoom = self.fig3.add_subplot(gs3[0, 1])
+        self.ax_validation = self.fig3.add_subplot(gs3[0, 2])
 
         canvas3 = FigureCanvasTkAgg(self.fig3, master=fig3_frame)
         canvas3.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -197,27 +194,7 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig3)
         self.canvases.append(canvas3)
-        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay])
-
-        # ==================== FIGURE 4: PSD ANALYSIS ====================
-        fig4_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig4_frame, text="Figure 4 - PSD Analysis")
-
-        self.fig4 = plt.figure(figsize=(15, 4))
-        gs4 = GridSpec(1, 3, figure=self.fig4, hspace=0.3, wspace=0.3)
-
-        self.ax_psd_axis = self.fig4.add_subplot(gs4[0, 0])
-        self.ax_psd_all = self.fig4.add_subplot(gs4[0, 1])
-        self.ax_bands = self.fig4.add_subplot(gs4[0, 2])
-
-        canvas4 = FigureCanvasTkAgg(self.fig4, master=fig4_frame)
-        canvas4.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        toolbar4 = NavigationToolbar2Tk(canvas4, fig4_frame)
-        toolbar4.update()
-
-        self.figures.append(self.fig4)
-        self.canvases.append(canvas4)
-        self.all_axes.extend([self.ax_psd_axis, self.ax_psd_all, self.ax_bands])
+        self.all_axes.extend([self.ax_psd_full, self.ax_psd_zoom, self.ax_validation])
 
         # Initialize plots
         self.clear_all_plots()
@@ -318,7 +295,7 @@ class TremorAnalyzerResearch:
         return data
 
     def process_tremor_analysis(self):
-        """Main tremor analysis pipeline - Simplified with single filter"""
+        """Main tremor analysis pipeline - Resultant vector only"""
 
         # Extract data
         ax = self.data['Ax']
@@ -331,24 +308,6 @@ class TremorAnalyzerResearch:
         ay_clean = ay - np.mean(ay)
         az_clean = az - np.mean(az)
 
-        # Find highest energy axis
-        energy_x = np.sum(ax_clean**2)
-        energy_y = np.sum(ay_clean**2)
-        energy_z = np.sum(az_clean**2)
-
-        energies = {'X': energy_x, 'Y': energy_y, 'Z': energy_z}
-        max_axis = max(energies, key=energies.get)
-
-        if max_axis == 'X':
-            dominant_axis = ax_clean
-            axis_color = COL_X
-        elif max_axis == 'Y':
-            dominant_axis = ay_clean
-            axis_color = COL_Y
-        else:
-            dominant_axis = az_clean
-            axis_color = COL_Z
-
         # Calculate resultant vector (magnitude)
         accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
 
@@ -358,64 +317,46 @@ class TremorAnalyzerResearch:
                                     [FREQ_TREMOR_LOW/nyquist, FREQ_TREMOR_HIGH/nyquist],
                                     btype='band')
 
-        # Apply filter to dominant axis and resultant
-        axis_filtered = filtfilt(b_tremor, a_tremor, dominant_axis)
+        # Apply filter to resultant vector
         result_filtered = filtfilt(b_tremor, a_tremor, accel_mag)
 
         # Calculate PSDs
         nperseg = min(len(accel_mag), int(FS * WINDOW_SEC))
         noverlap = int(nperseg * PSD_OVERLAP)
 
-        # PSD for dominant axis
-        f_axis, psd_axis_raw = welch(dominant_axis, FS, nperseg=nperseg, noverlap=noverlap)
-        _, psd_axis_filt = welch(axis_filtered, FS, nperseg=nperseg, noverlap=noverlap)
+        # PSD for resultant (raw and filtered)
+        f_psd, psd_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
 
-        # PSD for resultant
-        f_result, psd_result_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
-        _, psd_result_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
-
-        # Calculate metrics with validation
-        metrics = self.calculate_metrics(
-            accel_mag, result_filtered,
-            f_result, psd_result_raw, max_axis, axis_color, axis_filtered
-        )
+        # Calculate metrics - peak detection on FILTERED PSD
+        metrics = self.calculate_metrics(accel_mag, result_filtered, f_psd, psd_filt)
 
         # Visualize everything
         self.plot_analysis(
-            t, dominant_axis, axis_filtered, accel_mag, result_filtered,
-            ax_clean, ay_clean, az_clean,
-            f_axis, psd_axis_raw, psd_axis_filt,
-            f_result, psd_result_raw, psd_result_filt,
-            b_tremor, a_tremor,
-            metrics, max_axis, axis_color
+            t, accel_mag, result_filtered,
+            f_psd, psd_raw, psd_filt,
+            b_tremor, a_tremor, metrics
         )
 
-    def calculate_metrics(self, accel_raw, accel_filt,
-                          freq, psd, max_axis, axis_color, axis_filt):
-        """Calculate tremor metrics and validate against expected frequency"""
+    def calculate_metrics(self, accel_raw, accel_filt, freq, psd_filt):
+        """Calculate tremor metrics and validate against expected frequency.
+        Peak detection uses the FILTERED PSD so the marker sits on the filtered curve."""
         metrics = {}
 
-        # Store axis info
-        metrics['max_axis'] = max_axis
-        metrics['axis_color'] = axis_color
-
-        # Accelerometer features (using resultant vector)
-        metrics['accel_mean'] = np.mean(accel_filt)
+        # Resultant vector features
         metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))
+        metrics['accel_mean'] = np.mean(np.abs(accel_filt))
         metrics['accel_max'] = np.max(np.abs(accel_filt))
 
-        # Dominant axis RMS
-        metrics['axis_rms'] = np.sqrt(np.mean(axis_filt**2))
-
-        # Total power in rest tremor clinical band (3-7 Hz)
+        # Total power in rest tremor clinical band (3-7 Hz) from filtered PSD
         rest_mask = (freq >= FREQ_REST_LOW) & (freq <= FREQ_REST_HIGH)
-        metrics['total_power'] = np.trapz(psd[rest_mask], freq[rest_mask])
+        metrics['total_power'] = np.trapz(psd_filt[rest_mask], freq[rest_mask])
 
-        # Dominant frequency and peak spectral density (within 3-7 Hz)
+        # Dominant frequency and peak spectral density (within 3-7 Hz on filtered PSD)
         if np.sum(rest_mask) > 0:
-            peak_idx = np.argmax(psd[rest_mask])
+            peak_idx = np.argmax(psd_filt[rest_mask])
             metrics['dominant_freq'] = freq[rest_mask][peak_idx]
-            metrics['peak_power_density'] = psd[rest_mask][peak_idx]
+            metrics['peak_power_density'] = psd_filt[rest_mask][peak_idx]
         else:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
@@ -453,14 +394,13 @@ class TremorAnalyzerResearch:
 
         return metrics
 
-    def plot_analysis(self, t, axis_raw, axis_filt, result_raw, result_filt,
-                     ax, ay, az, f_axis, psd_axis_raw, psd_axis_filt,
-                     f_result, psd_result_raw, psd_result_filt,
-                     b_tremor, a_tremor, metrics, max_axis, axis_color):
-        """Plot complete analysis"""
+    def plot_analysis(self, t, result_raw, result_filt,
+                     f_psd, psd_raw, psd_filt,
+                     b_tremor, a_tremor, metrics):
+        """Plot complete analysis - resultant vector only"""
 
         # ============================================================
-        # ROW 1: FILTER CHARACTERISTICS
+        # FIGURE 1: FILTER CHARACTERISTICS
         # ============================================================
 
         # Bode Magnitude
@@ -502,25 +442,23 @@ class TremorAnalyzerResearch:
         deviation_text = f"Deviation: {metrics['deviation']:.2f} Hz" if metrics['deviation'] > 0 else "Deviation: 0 Hz"
 
         metrics_text = f"""INPUT-OUTPUT VALIDATION
-{'─'*35}
+{'='*35}
 Expected:    {metrics['expected_min']:.1f} - {metrics['expected_max']:.1f} Hz
 Measured:    {metrics['dominant_freq']:.2f} Hz
 Status:      [{status_symbol}] {metrics['validation_status']}
 {deviation_text}
 
-ACCELEROMETER METRICS
-{'─'*35}
-Dominant Axis:      {metrics['max_axis']}
-Axis RMS ({metrics['max_axis']}):    {metrics['axis_rms']:.4f} m/s²
-Resultant RMS:      {metrics['accel_rms']:.4f} m/s²
-Mean Amplitude:     {metrics['accel_mean']:.4f} m/s²
-Max Amplitude:      {metrics['accel_max']:.4f} m/s²
+RESULTANT VECTOR METRICS
+{'='*35}
+RMS Amplitude:      {metrics['accel_rms']:.4f} m/s^2
+Mean Amplitude:     {metrics['accel_mean']:.4f} m/s^2
+Max Amplitude:      {metrics['accel_max']:.4f} m/s^2
 
 REST TREMOR ANALYSIS (3-7 Hz)
-{'─'*35}
+{'='*35}
 Dominant Freq:      {metrics['dominant_freq']:.2f} Hz
-Peak PSD:           {metrics['peak_power_density']:.6f} m²/s⁴/Hz
-Band Power (3-7):   {metrics['total_power']:.6f} m²/s⁴
+Peak PSD:           {metrics['peak_power_density']:.6f}
+Band Power (3-7):   {metrics['total_power']:.6f}
 Filter:             2-8 Hz (Butterworth O4)
 """
 
@@ -531,59 +469,15 @@ Filter:             2-8 Hz (Butterworth O4)
         self.ax_metrics.set_title('Fig 1.3 - Metrics & Validation', fontweight='bold', loc='left')
 
         # ============================================================
-        # ROW 2: HIGHEST ENERGY AXIS ANALYSIS
-        # ============================================================
-
-        # Raw signal
-        self.ax_axis_raw.clear()
-        self.ax_axis_raw.plot(t, axis_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_axis_raw.set_title(f'Fig 2.1 - {max_axis}-Axis Raw | RMS: {np.sqrt(np.mean(axis_raw**2)):.4f} m/s²',
-                                  fontweight='bold')
-        self.ax_axis_raw.set_ylabel(f'{max_axis} (m/s²)')
-        self.ax_axis_raw.set_xlabel('Time (s)')
-        self.ax_axis_raw.grid(True, alpha=0.3)
-        self.ax_axis_raw.margins(x=0)
-
-        # Filtered signal
-        self.ax_axis_filtered.clear()
-        self.ax_axis_filtered.plot(t, axis_filt, color=COL_FILTERED, linewidth=1.2)
-
-        # Add envelope
-        envelope = np.abs(hilbert(axis_filt))
-        self.ax_axis_filtered.plot(t, envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
-        self.ax_axis_filtered.plot(t, -envelope, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
-
-        self.ax_axis_filtered.set_title(f'Fig 2.2 - {max_axis}-Axis Filtered (2-8 Hz) | RMS: {np.sqrt(np.mean(axis_filt**2)):.4f} m/s²',
-                                       fontweight='bold')
-        self.ax_axis_filtered.set_ylabel(f'{max_axis} (m/s²)')
-        self.ax_axis_filtered.set_xlabel('Time (s)')
-        self.ax_axis_filtered.grid(True, alpha=0.3)
-        self.ax_axis_filtered.margins(x=0)
-
-        # Overlay comparison
-        self.ax_axis_overlay.clear()
-        self.ax_axis_overlay.plot(t, axis_raw, color=COL_RAW, linewidth=1,
-                                 alpha=0.5, label='Raw')
-        self.ax_axis_overlay.plot(t, axis_filt, color=COL_FILTERED, linewidth=1.5,
-                                 label='Filtered (2-8 Hz)')
-
-        self.ax_axis_overlay.set_title(f'Fig 2.3 - {max_axis}-Axis: Raw vs Filtered', fontweight='bold')
-        self.ax_axis_overlay.set_ylabel(f'{max_axis} (m/s²)')
-        self.ax_axis_overlay.set_xlabel('Time (s)')
-        self.ax_axis_overlay.grid(True, alpha=0.3)
-        self.ax_axis_overlay.margins(x=0)
-        self.ax_axis_overlay.legend(fontsize=8)
-
-        # ============================================================
-        # ROW 3: RESULTANT VECTOR ANALYSIS
+        # FIGURE 2: RESULTANT VECTOR ANALYSIS
         # ============================================================
 
         # Raw resultant
         self.ax_result_raw.clear()
         self.ax_result_raw.plot(t, result_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_result_raw.set_title(f'Fig 3.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s²',
+        self.ax_result_raw.set_title(f'Fig 2.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s^2',
                                     fontweight='bold')
-        self.ax_result_raw.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_raw.set_ylabel('Magnitude (m/s^2)')
         self.ax_result_raw.set_xlabel('Time (s)')
         self.ax_result_raw.grid(True, alpha=0.3)
         self.ax_result_raw.margins(x=0)
@@ -597,9 +491,9 @@ Filter:             2-8 Hz (Butterworth O4)
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        self.ax_result_filtered.set_title(f'Fig 3.2 - Resultant Filtered (2-8 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s²',
+        self.ax_result_filtered.set_title(f'Fig 2.2 - Resultant Filtered (2-8 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s^2',
                                          fontweight='bold')
-        self.ax_result_filtered.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_filtered.set_ylabel('Magnitude (m/s^2)')
         self.ax_result_filtered.set_xlabel('Time (s)')
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
@@ -611,98 +505,93 @@ Filter:             2-8 Hz (Butterworth O4)
         self.ax_result_overlay.plot(t, result_filt, color=COL_FILTERED, linewidth=1.5,
                                    label='Filtered (2-8 Hz)')
 
-        self.ax_result_overlay.set_title('Fig 3.3 - Resultant: Raw vs Filtered', fontweight='bold')
-        self.ax_result_overlay.set_ylabel('Magnitude (m/s²)')
+        self.ax_result_overlay.set_title('Fig 2.3 - Resultant: Raw vs Filtered', fontweight='bold')
+        self.ax_result_overlay.set_ylabel('Magnitude (m/s^2)')
         self.ax_result_overlay.set_xlabel('Time (s)')
         self.ax_result_overlay.grid(True, alpha=0.3)
         self.ax_result_overlay.margins(x=0)
         self.ax_result_overlay.legend(fontsize=8)
 
         # ============================================================
-        # ROW 4: PSD ANALYSIS
+        # FIGURE 3: PSD ANALYSIS
         # ============================================================
 
-        # PSD of dominant axis
-        self.ax_psd_axis.clear()
-        psd_raw_db = 10*np.log10(psd_axis_raw + 1e-12)
-        psd_filt_db = 10*np.log10(psd_axis_filt + 1e-12)
+        expected_color = metrics['validation_color']
 
-        self.ax_psd_axis.plot(f_axis, psd_raw_db, color=COL_RAW,
+        # PSD full range (0-20 Hz)
+        self.ax_psd_full.clear()
+        psd_raw_db = 10*np.log10(psd_raw + 1e-12)
+        psd_filt_db = 10*np.log10(psd_filt + 1e-12)
+
+        self.ax_psd_full.plot(f_psd, psd_raw_db, color=COL_RAW,
                              linewidth=1, alpha=0.6, label='Raw')
-        self.ax_psd_axis.plot(f_axis, psd_filt_db, color=axis_color,
+        self.ax_psd_full.plot(f_psd, psd_filt_db, color=COL_FILTERED,
                              linewidth=1.5, label='Filtered')
 
-        # Show expected frequency range
-        expected_color = metrics['validation_color']
-        self.ax_psd_axis.axvspan(metrics['expected_min'], metrics['expected_max'],
-                                color=expected_color, alpha=0.3,
-                                label=f"Expected ({metrics['expected_min']:.1f}-{metrics['expected_max']:.1f} Hz)")
+        # Mark dominant frequency on FILTERED curve
+        if metrics['dominant_freq'] > 0:
+            peak_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
+            self.ax_psd_full.plot(metrics['dominant_freq'], peak_db, 'o',
+                                color='red', markersize=8,
+                                label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
-        # Mark dominant frequency for THIS axis PSD (rest tremor band 3-7 Hz)
-        tremor_mask_axis = (f_axis >= FREQ_REST_LOW) & (f_axis <= FREQ_REST_HIGH)
-        if np.sum(tremor_mask_axis) > 0:
-            peak_idx_axis = np.argmax(psd_axis_raw[tremor_mask_axis])
-            axis_dom_freq = f_axis[tremor_mask_axis][peak_idx_axis]
-            axis_peak_power = psd_axis_raw[tremor_mask_axis][peak_idx_axis]
-            axis_dom_psd_db = 10*np.log10(axis_peak_power + 1e-12)
-            self.ax_psd_axis.plot(axis_dom_freq, axis_dom_psd_db, 'o',
-                                 color='red', markersize=8,
-                                 label=f"Measured: {axis_dom_freq:.2f} Hz")
+        # Highlight clinical band
+        self.ax_psd_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
+                                color='yellow', alpha=0.15, label='Clinical 3-7 Hz')
 
-        self.ax_psd_axis.set_title(f'Fig 4.1 - PSD: {max_axis}-Axis', fontweight='bold')
-        self.ax_psd_axis.set_xlabel('Frequency (Hz)')
-        self.ax_psd_axis.set_ylabel('Power (dB)')
-        self.ax_psd_axis.set_xlim(0, 20)
-        self.ax_psd_axis.grid(True, alpha=0.3)
-        self.ax_psd_axis.legend(fontsize=7)
+        self.ax_psd_full.set_title('Fig 3.1 - PSD: Resultant Vector (0-20 Hz)', fontweight='bold')
+        self.ax_psd_full.set_xlabel('Frequency (Hz)')
+        self.ax_psd_full.set_ylabel('Power (dB)')
+        self.ax_psd_full.set_xlim(0, 20)
+        self.ax_psd_full.grid(True, alpha=0.3)
+        self.ax_psd_full.legend(fontsize=7)
 
-        # PSD of resultant vector
-        self.ax_psd_all.clear()
-        psd_result_raw_db = 10*np.log10(psd_result_raw + 1e-12)
-        psd_result_filt_db = 10*np.log10(psd_result_filt + 1e-12)
+        # PSD zoomed to tremor range (1-12 Hz)
+        self.ax_psd_zoom.clear()
 
-        self.ax_psd_all.plot(f_result, psd_result_raw_db, color=COL_RAW,
-                            linewidth=1, alpha=0.6, label='Raw')
-        self.ax_psd_all.plot(f_result, psd_result_filt_db, color=COL_FILTERED,
-                            linewidth=1.5, label='Filtered')
+        self.ax_psd_zoom.plot(f_psd, psd_filt_db, color=COL_FILTERED,
+                             linewidth=1.5, label='Filtered PSD')
 
         # Show expected frequency range
-        self.ax_psd_all.axvspan(metrics['expected_min'], metrics['expected_max'],
+        self.ax_psd_zoom.axvspan(metrics['expected_min'], metrics['expected_max'],
                                color=expected_color, alpha=0.3,
                                label=f"Expected ({metrics['expected_min']:.1f}-{metrics['expected_max']:.1f} Hz)")
 
-        # Mark dominant frequency for resultant PSD
-        if metrics['dominant_freq'] > 0:
-            result_dom_psd_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
-            self.ax_psd_all.plot(metrics['dominant_freq'], result_dom_psd_db, 'o',
-                                color='red', markersize=8,
-                                label=f"Measured: {metrics['dominant_freq']:.2f} Hz")
+        # Highlight clinical band
+        self.ax_psd_zoom.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
+                                color='yellow', alpha=0.1, label='Clinical 3-7 Hz')
 
-        self.ax_psd_all.set_title('Fig 4.2 - PSD: Resultant Vector', fontweight='bold')
-        self.ax_psd_all.set_xlabel('Frequency (Hz)')
-        self.ax_psd_all.set_ylabel('Power (dB)')
-        self.ax_psd_all.set_xlim(0, 20)
-        self.ax_psd_all.grid(True, alpha=0.3)
-        self.ax_psd_all.legend(fontsize=7)
+        # Mark dominant frequency on FILTERED curve
+        if metrics['dominant_freq'] > 0:
+            peak_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
+            self.ax_psd_zoom.plot(metrics['dominant_freq'], peak_db, 'o',
+                                color='red', markersize=10,
+                                label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
+
+        self.ax_psd_zoom.set_title('Fig 3.2 - PSD Zoomed: Filtered (1-12 Hz)', fontweight='bold')
+        self.ax_psd_zoom.set_xlabel('Frequency (Hz)')
+        self.ax_psd_zoom.set_ylabel('Power (dB)')
+        self.ax_psd_zoom.set_xlim(1, 12)
+        self.ax_psd_zoom.grid(True, alpha=0.3)
+        self.ax_psd_zoom.legend(fontsize=7)
 
         # Validation Result Display
-        self.ax_bands.clear()
+        self.ax_validation.clear()
 
-        # Create validation visual
         status = metrics['validation_status']
         measured = metrics['dominant_freq']
         expected_min = metrics['expected_min']
         expected_max = metrics['expected_max']
 
         # Draw expected range bar
-        self.ax_bands.barh(0, expected_max - expected_min, left=expected_min,
+        self.ax_validation.barh(0, expected_max - expected_min, left=expected_min,
                           height=0.4, color=expected_color, alpha=0.5,
                           label='Expected Range')
 
         # Draw measured frequency marker
-        self.ax_bands.plot(measured, 0, 'o', color='red', markersize=15,
+        self.ax_validation.plot(measured, 0, 'o', color='red', markersize=15,
                           label=f'Measured: {measured:.2f} Hz', zorder=5)
-        self.ax_bands.axvline(measured, color='red', linestyle='--', alpha=0.7)
+        self.ax_validation.axvline(measured, color='red', linestyle='--', alpha=0.7)
 
         # Add text annotation
         if status == "PASS":
@@ -710,20 +599,20 @@ Filter:             2-8 Hz (Butterworth O4)
         else:
             result_text = f"FAIL\nMeasured: {measured:.2f} Hz\nExpected: {expected_min:.1f}-{expected_max:.1f} Hz\nDeviation: {metrics['deviation']:.2f} Hz"
 
-        self.ax_bands.text(0.98, 0.95, result_text, transform=self.ax_bands.transAxes,
+        self.ax_validation.text(0.98, 0.95, result_text, transform=self.ax_validation.transAxes,
                           fontsize=10, verticalalignment='top', horizontalalignment='right',
                           fontfamily='monospace',
                           bbox=dict(boxstyle='round', facecolor=expected_color, alpha=0.3))
 
-        self.ax_bands.set_xlim(0, 15)
-        self.ax_bands.set_ylim(-0.5, 0.5)
-        self.ax_bands.set_yticks([])
-        self.ax_bands.set_xlabel('Frequency (Hz)')
-        self.ax_bands.set_title('Fig 4.3 - Input/Output Validation', fontweight='bold')
-        self.ax_bands.grid(True, alpha=0.3, axis='x')
-        self.ax_bands.legend(fontsize=8, loc='upper left')
+        self.ax_validation.set_xlim(0, 15)
+        self.ax_validation.set_ylim(-0.5, 0.5)
+        self.ax_validation.set_yticks([])
+        self.ax_validation.set_xlabel('Frequency (Hz)')
+        self.ax_validation.set_title('Fig 3.3 - Input/Output Validation', fontweight='bold')
+        self.ax_validation.grid(True, alpha=0.3, axis='x')
+        self.ax_validation.legend(fontsize=8, loc='upper left')
 
-        # Draw all canvases (MATLAB-style separate figures)
+        # Draw all canvases
         for canvas in self.canvases:
             canvas.draw()
 
@@ -737,16 +626,15 @@ Filter:             2-8 Hz (Butterworth O4)
         print(f"  Status:         {metrics['validation_status']}")
         if metrics['deviation'] > 0:
             print(f"  Deviation:      {metrics['deviation']:.2f} Hz")
-        print(f"\nACCELEROMETER METRICS:")
-        print(f"  Dominant Axis:  {metrics['max_axis']}")
-        print(f"  Axis RMS:       {metrics['axis_rms']:.4f} m/s²")
-        print(f"  Resultant RMS:  {metrics['accel_rms']:.4f} m/s²")
-        print(f"  Max Amplitude:  {metrics['accel_max']:.4f} m/s²")
+        print(f"\nRESULTANT VECTOR METRICS:")
+        print(f"  RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2")
+        print(f"  Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2")
+        print(f"  Max Amplitude:  {metrics['accel_max']:.4f} m/s^2")
         print(f"\nREST TREMOR ANALYSIS (3-7 Hz):")
         print(f"  Filter:         2-8 Hz (Butterworth Order 4)")
         print(f"  Dominant Freq:  {metrics['dominant_freq']:.2f} Hz")
-        print(f"  Peak PSD:       {metrics['peak_power_density']:.6f} m²/s⁴/Hz")
-        print(f"  Band Power:     {metrics['total_power']:.6f} m²/s⁴")
+        print(f"  Peak PSD:       {metrics['peak_power_density']:.6f}")
+        print(f"  Band Power:     {metrics['total_power']:.6f}")
         print("="*70 + "\n")
 
 

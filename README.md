@@ -1031,12 +1031,10 @@ The offline analyzer focuses on **rest tremor detection (3-7 Hz)** using a singl
 
 **Signal Processing Approach:**
 - **Accelerometer Focus**: Gyroscope data excluded (motor artifact concerns in motor-holding tests)
-- **Dual Perspective**: Both dominant axis analysis AND resultant vector magnitude
-- **Automatic Axis Detection**: Identifies highest energy axis (X, Y, or Z) automatically
+- **Resultant Vector**: Magnitude `sqrt(Ax^2 + Ay^2 + Az^2)` after gravity removal per axis
 - **Single Bandpass Filter**: 2-8 Hz Butterworth order 4 (extended from clinical 3-7 Hz to avoid -3dB edge attenuation)
 - **Zero-Phase Filtering**: Forward-backward (`filtfilt`) for no phase distortion
-- **Resultant Vector**: Magnitude `sqrt(Ax^2 + Ay^2 + Az^2)` after gravity removal
-- **PSD Analysis**: Welch method (4s window, 50% overlap), peak detection within 3-7 Hz
+- **PSD Analysis**: Welch method (4s window, 50% overlap), peak detection on filtered PSD within 3-7 Hz
 
 #### Input-Output Validation
 
@@ -1063,27 +1061,22 @@ Validation Logic:
 - At 3 Hz and 7 Hz: near-unity gain (no -3dB attenuation)
 - Implementation: `scipy.signal.butter` + `filtfilt` (zero-phase)
 
-#### Visualization Dashboard
+#### Visualization Dashboard (3 Figures x 3 Plots)
 
-**Row 1: Filter Characteristics & Metrics**
+**Figure 1: Filter Characteristics & Metrics**
 - Bode magnitude response (Butterworth order 4, 2-8 Hz)
 - Bode phase response
 - Validation results table (expected range, measured peak, PASS/FAIL)
 
-**Row 2: Dominant Axis Analysis (Auto-Detected)**
-- Highest energy axis - raw signal
-- Filtered signal (2-8 Hz) with envelope
-- Raw vs Filtered overlay comparison
-
-**Row 3: Resultant Vector Analysis**
+**Figure 2: Resultant Vector Analysis**
 - Raw resultant magnitude `sqrt(Ax^2 + Ay^2 + Az^2)`
 - Filtered resultant (2-8 Hz) with envelope
 - Raw vs Filtered overlay comparison
 
-**Row 4: Power Spectral Density (PSD) Analysis**
-- PSD of dominant axis with 3-7 Hz clinical band highlighted
-- PSD of resultant vector (raw vs filtered)
-- Rest tremor band power (3-7 Hz)
+**Figure 3: Power Spectral Density (PSD) Analysis**
+- PSD full range (0-20 Hz): raw vs filtered, peak marked on filtered curve
+- PSD zoomed (1-12 Hz): filtered PSD with expected range and peak marker
+- Input/Output validation visual (expected range bar + measured frequency)
 
 #### Running the Analyzer
 
