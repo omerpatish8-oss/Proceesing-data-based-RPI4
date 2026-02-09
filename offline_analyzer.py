@@ -403,34 +403,55 @@ class TremorAnalyzerResearch:
         # FIGURE 1: FILTER CHARACTERISTICS
         # ============================================================
 
-        # Bode Magnitude
+        # Bode Magnitude - Show both single-pass and filtfilt (double attenuation)
         self.ax_bode_mag.clear()
         w, h = freqz(b_tremor, a_tremor, worN=4096, fs=FS)
+        mag_single = 20*np.log10(abs(h))
+        mag_filtfilt = 2 * mag_single  # filtfilt = forward + backward = 2x in dB
 
-        self.ax_bode_mag.plot(w, 20*np.log10(abs(h)), color='purple', linewidth=2)
+        # Single-pass (for reference)
+        self.ax_bode_mag.plot(w, mag_single, color='gray', linewidth=1.5,
+                             linestyle='--', alpha=0.6, label='Single-pass (O4)')
+
+        # filtfilt = equivalent to Order 8 (double attenuation)
+        self.ax_bode_mag.plot(w, mag_filtfilt, color='purple', linewidth=2,
+                             label='filtfilt (effective O8)')
+
         self.ax_bode_mag.axvline(FREQ_TREMOR_LOW, color='red', linestyle=':', alpha=0.5, label=f'{FREQ_TREMOR_LOW} Hz')
         self.ax_bode_mag.axvline(FREQ_TREMOR_HIGH, color='blue', linestyle=':', alpha=0.5, label=f'{FREQ_TREMOR_HIGH} Hz')
         self.ax_bode_mag.axhline(-3, color='green', linestyle='--', alpha=0.5, label='-3 dB')
+        self.ax_bode_mag.axhline(-6, color='orange', linestyle='--', alpha=0.5, label='-6 dB (filtfilt)')
 
-        self.ax_bode_mag.set_title('Fig 1.1 - Filter Magnitude Response (Butterworth Order 4)', fontweight='bold')
+        self.ax_bode_mag.set_title('Fig 1.1 - Magnitude: filtfilt doubles attenuation', fontweight='bold')
         self.ax_bode_mag.set_xlabel('Frequency (Hz)')
         self.ax_bode_mag.set_ylabel('Magnitude (dB)')
         self.ax_bode_mag.set_xlim(0, 20)
         self.ax_bode_mag.set_ylim(-60, 5)
         self.ax_bode_mag.grid(True, alpha=0.3)
-        self.ax_bode_mag.legend(fontsize=8)
+        self.ax_bode_mag.legend(fontsize=7, loc='lower left')
 
-        # Bode Phase
+        # Bode Phase - Show both single-pass and filtfilt (zero-phase)
         self.ax_bode_phase.clear()
-        self.ax_bode_phase.plot(w, np.unwrap(np.angle(h)) * 180/np.pi,
-                               color='purple', linewidth=2)
+        single_pass_phase = np.unwrap(np.angle(h)) * 180/np.pi
+
+        # Single-pass phase (theoretical - for reference)
+        self.ax_bode_phase.plot(w, single_pass_phase,
+                               color='gray', linewidth=1.5, linestyle='--', alpha=0.6,
+                               label='Single-pass (lfilter)')
+
+        # Zero-phase line (filtfilt result)
+        self.ax_bode_phase.axhline(0, color='green', linewidth=2.5,
+                                   label='Zero-phase (filtfilt) ✓')
+
         self.ax_bode_phase.axvline(FREQ_TREMOR_LOW, color='red', linestyle=':', alpha=0.5)
         self.ax_bode_phase.axvline(FREQ_TREMOR_HIGH, color='blue', linestyle=':', alpha=0.5)
 
-        self.ax_bode_phase.set_title('Fig 1.2 - Filter Phase Response', fontweight='bold')
+        self.ax_bode_phase.set_title('Fig 1.2 - Phase Response: filtfilt = Zero Phase', fontweight='bold')
         self.ax_bode_phase.set_xlabel('Frequency (Hz)')
         self.ax_bode_phase.set_ylabel('Phase (degrees)')
         self.ax_bode_phase.set_xlim(0, 20)
+        self.ax_bode_phase.set_ylim(-800, 100)
+        self.ax_bode_phase.legend(loc='lower left', fontsize=8)
         self.ax_bode_phase.grid(True, alpha=0.3)
 
         # Metrics and Validation Table
