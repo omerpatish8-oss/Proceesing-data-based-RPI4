@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Rest Tremor Analysis Tool - Research-Based Implementation
-Focused on rest tremor (3-7 Hz) detection using resultant vector magnitude.
+Focused on rest tremor (2-8 Hz) detection using resultant vector magnitude.
 Bandpass filter: 2-8 Hz (avoids edge attenuation at 3 and 7 Hz).
-Validation: user enters expected frequency range, system checks PSD peak.
+Validation: user enters PWM frequency, system checks if PSD peak matches within +/-0.5 Hz.
 Based on MDPI papers: Parkinson's tremor assessment with MPU6050 + ESP32
 """
 
@@ -27,9 +27,9 @@ FILTER_ORDER = 4        # Butterworth filter order (standard)
 FREQ_TREMOR_LOW = 2.0   # Lower bound (below 3 Hz to preserve edge)
 FREQ_TREMOR_HIGH = 8.0  # Upper bound (above 7 Hz to preserve edge)
 
-# Rest tremor clinical band (for PSD analysis)
-FREQ_REST_LOW = 3.0     # Clinical rest tremor lower bound
-FREQ_REST_HIGH = 7.0    # Clinical rest tremor upper bound
+# Rest tremor analysis band (matching filter band)
+FREQ_REST_LOW = 2.0     # Rest tremor analysis lower bound (= filter low)
+FREQ_REST_HIGH = 8.0    # Rest tremor analysis upper bound (= filter high)
 
 # PSD parameters
 WINDOW_SEC = 4          # Welch window size (seconds)
@@ -47,16 +47,15 @@ COL_FAIL = '#E74C3C'        # Red - Validation fail
 class TremorAnalyzerResearch:
     def __init__(self, root):
         self.root = root
-        self.root.title("Rest Tremor Analyzer - Input/Output Validation (3-7 Hz)")
+        self.root.title("Rest Tremor Analyzer - Input/Output Validation (2-8 Hz)")
         self.root.geometry("1600x1000")
 
         # Data storage
         self.csv_path = None
         self.data = None
 
-        # Expected frequency (from motor input)
-        self.expected_freq_min = None
-        self.expected_freq_max = None
+        # PWM frequency (from motor input)
+        self.pwm_freq = None
 
         # Setup UI
         self.setup_style()
@@ -93,20 +92,15 @@ class TremorAnalyzerResearch:
                                     font=("Arial", 10, "bold"))
         self.lbl_status.pack(side=tk.LEFT, padx=20)
 
-        # Expected frequency input (from motor)
-        freq_frame = ttk.LabelFrame(control_frame, text="Expected Frequency (Motor Input)",
+        # PWM frequency input (from motor)
+        freq_frame = ttk.LabelFrame(control_frame, text="PWM Frequency (Motor Input)",
                                     padding="5")
         freq_frame.pack(side=tk.RIGHT, padx=10)
 
-        ttk.Label(freq_frame, text="Min (Hz):").pack(side=tk.LEFT)
-        self.entry_freq_min = ttk.Entry(freq_frame, width=6)
-        self.entry_freq_min.pack(side=tk.LEFT, padx=2)
-        self.entry_freq_min.insert(0, "4.0")
-
-        ttk.Label(freq_frame, text="Max (Hz):").pack(side=tk.LEFT, padx=(10, 0))
-        self.entry_freq_max = ttk.Entry(freq_frame, width=6)
-        self.entry_freq_max.pack(side=tk.LEFT, padx=2)
-        self.entry_freq_max.insert(0, "6.0")
+        ttk.Label(freq_frame, text="PWM Freq (Hz):").pack(side=tk.LEFT)
+        self.entry_pwm_freq = ttk.Entry(freq_frame, width=8)
+        self.entry_pwm_freq.pack(side=tk.LEFT, padx=2)
+        self.entry_pwm_freq.insert(0, "5.0")
 
         # Validation result panel
         self.result_frame = ttk.LabelFrame(control_frame, text="Validation Result",
@@ -138,14 +132,13 @@ class TremorAnalyzerResearch:
 
         # ==================== FIGURE 1: FILTER CHARACTERISTICS ====================
         fig1_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig1_frame, text="Figure 1 - Filters & Metrics")
+        self.notebook.add(fig1_frame, text="Figure 1 - Filters")
 
         self.fig1 = plt.figure(figsize=(15, 4))
-        gs1 = GridSpec(1, 3, figure=self.fig1, hspace=0.3, wspace=0.3)
+        gs1 = GridSpec(1, 2, figure=self.fig1, hspace=0.3, wspace=0.3)
 
         self.ax_bode_mag = self.fig1.add_subplot(gs1[0, 0])
         self.ax_bode_phase = self.fig1.add_subplot(gs1[0, 1])
-        self.ax_metrics = self.fig1.add_subplot(gs1[0, 2])
 
         canvas1 = FigureCanvasTkAgg(self.fig1, master=fig1_frame)
         canvas1.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -154,7 +147,7 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig1)
         self.canvases.append(canvas1)
-        self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase, self.ax_metrics])
+        self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase])
 
         # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS ====================
         fig2_frame = ttk.Frame(self.notebook)
@@ -185,7 +178,7 @@ class TremorAnalyzerResearch:
 
         self.ax_psd_full = self.fig3.add_subplot(gs3[0, 0])
         self.ax_psd_zoom = self.fig3.add_subplot(gs3[0, 1])
-        self.ax_validation = self.fig3.add_subplot(gs3[0, 2])
+        self.ax_metrics = self.fig3.add_subplot(gs3[0, 2])
 
         canvas3 = FigureCanvasTkAgg(self.fig3, master=fig3_frame)
         canvas3.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -194,7 +187,7 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig3)
         self.canvases.append(canvas3)
-        self.all_axes.extend([self.ax_psd_full, self.ax_psd_zoom, self.ax_validation])
+        self.all_axes.extend([self.ax_psd_full, self.ax_psd_zoom, self.ax_metrics])
 
         # Initialize plots
         self.clear_all_plots()
@@ -215,15 +208,14 @@ class TremorAnalyzerResearch:
 
     def load_and_process(self):
         """Load CSV file and process data"""
-        # Get expected frequency from input fields
+        # Get PWM frequency from input field
         try:
-            self.expected_freq_min = float(self.entry_freq_min.get())
-            self.expected_freq_max = float(self.entry_freq_max.get())
-            if self.expected_freq_min >= self.expected_freq_max:
-                messagebox.showerror("Error", "Min frequency must be less than Max frequency")
+            self.pwm_freq = float(self.entry_pwm_freq.get())
+            if self.pwm_freq <= 0:
+                messagebox.showerror("Error", "PWM frequency must be positive")
                 return
         except ValueError:
-            messagebox.showerror("Error", "Invalid frequency values. Please enter numbers.")
+            messagebox.showerror("Error", "Invalid PWM frequency. Please enter a number.")
             return
 
         # File dialog
@@ -339,8 +331,8 @@ class TremorAnalyzerResearch:
         )
 
     def calculate_metrics(self, accel_raw, accel_filt, freq, psd_filt):
-        """Calculate tremor metrics and validate against expected frequency.
-        Peak detection uses the FILTERED PSD so the marker sits on the filtered curve."""
+        """Calculate tremor metrics and validate against PWM frequency.
+        Peak detection uses the FILTERED PSD within 2-8 Hz band."""
         metrics = {}
 
         # Resultant vector features
@@ -348,11 +340,11 @@ class TremorAnalyzerResearch:
         metrics['accel_mean'] = np.mean(np.abs(accel_filt))
         metrics['accel_max'] = np.max(np.abs(accel_filt))
 
-        # Total power in rest tremor clinical band (3-7 Hz) from filtered PSD
+        # Total power in rest tremor band (2-8 Hz) from filtered PSD
         rest_mask = (freq >= FREQ_REST_LOW) & (freq <= FREQ_REST_HIGH)
         metrics['total_power'] = np.trapz(psd_filt[rest_mask], freq[rest_mask])
 
-        # Dominant frequency and peak spectral density (within 3-7 Hz on filtered PSD)
+        # Dominant frequency and peak spectral density (within 2-8 Hz on filtered PSD)
         if np.sum(rest_mask) > 0:
             peak_idx = np.argmax(psd_filt[rest_mask])
             metrics['dominant_freq'] = freq[rest_mask][peak_idx]
@@ -361,29 +353,20 @@ class TremorAnalyzerResearch:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
 
-        # Input-Output Validation
+        # Input-Output Validation: |PSD_peak - PWM_freq| <= 2 * freq_resolution (0.5 Hz)
         measured_freq = metrics['dominant_freq']
-        expected_min = self.expected_freq_min
-        expected_max = self.expected_freq_max
+        pwm_freq = self.pwm_freq
+        deviation = abs(measured_freq - pwm_freq)
 
-        # Check if measured frequency is within expected range
-        in_range = (measured_freq >= expected_min) and (measured_freq <= expected_max)
-
-        if in_range:
+        if deviation <= FREQ_TOLERANCE_HZ:
             metrics['validation_status'] = "PASS"
-            metrics['deviation'] = 0.0
             metrics['validation_color'] = COL_PASS
         else:
             metrics['validation_status'] = "FAIL"
-            # Calculate deviation from nearest boundary
-            if measured_freq < expected_min:
-                metrics['deviation'] = expected_min - measured_freq
-            else:
-                metrics['deviation'] = measured_freq - expected_max
             metrics['validation_color'] = COL_FAIL
 
-        metrics['expected_min'] = expected_min
-        metrics['expected_max'] = expected_max
+        metrics['deviation'] = deviation
+        metrics['pwm_freq'] = pwm_freq
 
         # Update UI
         self.lbl_measured_freq.config(text=f"Measured: {measured_freq:.2f} Hz")
@@ -454,41 +437,6 @@ class TremorAnalyzerResearch:
         self.ax_bode_phase.legend(loc='lower left', fontsize=8)
         self.ax_bode_phase.grid(True, alpha=0.3)
 
-        # Metrics and Validation Table
-        self.ax_metrics.clear()
-        self.ax_metrics.axis('off')
-
-        # Validation status indicator
-        status_symbol = "V" if metrics['validation_status'] == "PASS" else "X"
-        deviation_text = f"Deviation: {metrics['deviation']:.2f} Hz" if metrics['deviation'] > 0 else "Deviation: 0 Hz"
-
-        metrics_text = f"""INPUT-OUTPUT VALIDATION
-{'='*35}
-Expected:    {metrics['expected_min']:.1f} - {metrics['expected_max']:.1f} Hz
-Measured:    {metrics['dominant_freq']:.2f} Hz
-Status:      [{status_symbol}] {metrics['validation_status']}
-{deviation_text}
-
-RESULTANT VECTOR METRICS
-{'='*35}
-RMS Amplitude:      {metrics['accel_rms']:.4f} m/s^2
-Mean Amplitude:     {metrics['accel_mean']:.4f} m/s^2
-Max Amplitude:      {metrics['accel_max']:.4f} m/s^2
-
-REST TREMOR ANALYSIS (3-7 Hz)
-{'='*35}
-Dominant Freq:      {metrics['dominant_freq']:.2f} Hz
-Peak PSD:           {metrics['peak_power_density']:.6f}
-Band Power (3-7):   {metrics['total_power']:.6f}
-Filter:             2-8 Hz (Butterworth O4)
-"""
-
-        self.ax_metrics.text(0.05, 0.95, metrics_text,
-                            transform=self.ax_metrics.transAxes,
-                            fontfamily='monospace', fontsize=8,
-                            verticalalignment='top')
-        self.ax_metrics.set_title('Fig 1.3 - Metrics & Validation', fontweight='bold', loc='left')
-
         # ============================================================
         # FIGURE 2: RESULTANT VECTOR ANALYSIS
         # ============================================================
@@ -556,9 +504,9 @@ Filter:             2-8 Hz (Butterworth O4)
                                 color='red', markersize=8,
                                 label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
-        # Highlight clinical band
+        # Highlight analysis band (2-8 Hz)
         self.ax_psd_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
-                                color='yellow', alpha=0.15, label='Clinical 3-7 Hz')
+                                color='yellow', alpha=0.15, label='Analysis 2-8 Hz')
 
         self.ax_psd_full.set_title('Fig 3.1 - PSD: Resultant Vector (0-20 Hz)', fontweight='bold')
         self.ax_psd_full.set_xlabel('Frequency (Hz)')
@@ -573,14 +521,17 @@ Filter:             2-8 Hz (Butterworth O4)
         self.ax_psd_zoom.plot(f_psd, psd_filt_db, color=COL_FILTERED,
                              linewidth=1.5, label='Filtered PSD')
 
-        # Show expected frequency range
-        self.ax_psd_zoom.axvspan(metrics['expected_min'], metrics['expected_max'],
-                               color=expected_color, alpha=0.3,
-                               label=f"Expected ({metrics['expected_min']:.1f}-{metrics['expected_max']:.1f} Hz)")
+        # Show PWM frequency and tolerance band (±0.5 Hz)
+        pwm_freq = metrics['pwm_freq']
+        self.ax_psd_zoom.axvline(pwm_freq, color='blue', linestyle='-', alpha=0.7,
+                                linewidth=1.5, label=f'PWM Freq: {pwm_freq:.1f} Hz')
+        self.ax_psd_zoom.axvspan(pwm_freq - FREQ_TOLERANCE_HZ, pwm_freq + FREQ_TOLERANCE_HZ,
+                               color=expected_color, alpha=0.2,
+                               label=f'Tolerance \u00b1{FREQ_TOLERANCE_HZ} Hz')
 
-        # Highlight clinical band
+        # Highlight analysis band (2-8 Hz)
         self.ax_psd_zoom.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
-                                color='yellow', alpha=0.1, label='Clinical 3-7 Hz')
+                                color='yellow', alpha=0.1, label='Analysis 2-8 Hz')
 
         # Mark dominant frequency on FILTERED curve
         if metrics['dominant_freq'] > 0:
@@ -596,42 +547,41 @@ Filter:             2-8 Hz (Butterworth O4)
         self.ax_psd_zoom.grid(True, alpha=0.3)
         self.ax_psd_zoom.legend(fontsize=7)
 
-        # Validation Result Display
-        self.ax_validation.clear()
+        # Metrics & Validation Table (new Fig 3.3)
+        self.ax_metrics.clear()
+        self.ax_metrics.axis('off')
 
-        status = metrics['validation_status']
-        measured = metrics['dominant_freq']
-        expected_min = metrics['expected_min']
-        expected_max = metrics['expected_max']
+        status_symbol = "V" if metrics['validation_status'] == "PASS" else "X"
 
-        # Draw expected range bar
-        self.ax_validation.barh(0, expected_max - expected_min, left=expected_min,
-                          height=0.4, color=expected_color, alpha=0.5,
-                          label='Expected Range')
+        metrics_text = f"""INPUT-OUTPUT VALIDATION
+{'='*40}
+PWM Frequency:  {metrics['pwm_freq']:.2f} Hz
+PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz
+Deviation:      {metrics['deviation']:.2f} Hz
+Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)
+Status:         [{status_symbol}] {metrics['validation_status']}
 
-        # Draw measured frequency marker
-        self.ax_validation.plot(measured, 0, 'o', color='red', markersize=15,
-                          label=f'Measured: {measured:.2f} Hz', zorder=5)
-        self.ax_validation.axvline(measured, color='red', linestyle='--', alpha=0.7)
+RESULTANT VECTOR METRICS
+{'='*40}
+RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2
+Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2
+Max Amplitude:  {metrics['accel_max']:.4f} m/s^2
 
-        # Add text annotation
-        if status == "PASS":
-            result_text = f"PASS\nMeasured: {measured:.2f} Hz\nExpected: {expected_min:.1f}-{expected_max:.1f} Hz"
-        else:
-            result_text = f"FAIL\nMeasured: {measured:.2f} Hz\nExpected: {expected_min:.1f}-{expected_max:.1f} Hz\nDeviation: {metrics['deviation']:.2f} Hz"
+REST TREMOR ANALYSIS (2-8 Hz)
+{'='*40}
+Dominant Freq:  {metrics['dominant_freq']:.2f} Hz
+Peak PSD:       {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
+Band Power:     {metrics['total_power']:.6f} (m/s^2)^2
+Filter:         2-8 Hz (Butterworth O4, filtfilt)
+"""
 
-        self.ax_validation.text(0.98, 0.95, result_text, transform=self.ax_validation.transAxes,
-                          fontsize=10, verticalalignment='top', horizontalalignment='right',
-                          fontfamily='monospace',
-                          bbox=dict(boxstyle='round', facecolor=expected_color, alpha=0.3))
-
-        self.ax_validation.set_xlim(0, 15)
-        self.ax_validation.set_ylim(-0.5, 0.5)
-        self.ax_validation.set_yticks([])
-        self.ax_validation.set_xlabel('Frequency (Hz)')
-        self.ax_validation.set_title('Fig 3.3 - Input/Output Validation', fontweight='bold')
-        self.ax_validation.grid(True, alpha=0.3, axis='x')
-        self.ax_validation.legend(fontsize=8, loc='upper left')
+        bg_color = metrics['validation_color']
+        self.ax_metrics.text(0.05, 0.95, metrics_text,
+                            transform=self.ax_metrics.transAxes,
+                            fontfamily='monospace', fontsize=8,
+                            verticalalignment='top',
+                            bbox=dict(boxstyle='round,pad=0.5', facecolor=bg_color, alpha=0.15))
+        self.ax_metrics.set_title('Fig 3.3 - Metrics & Validation', fontweight='bold', loc='left')
 
         # Draw all canvases
         for canvas in self.canvases:
@@ -642,20 +592,20 @@ Filter:             2-8 Hz (Butterworth O4)
         print("INPUT-OUTPUT VALIDATION RESULTS")
         print("="*70)
         print(f"\nVALIDATION:")
-        print(f"  Expected Range: {metrics['expected_min']:.1f} - {metrics['expected_max']:.1f} Hz")
-        print(f"  Measured Freq:  {metrics['dominant_freq']:.2f} Hz")
+        print(f"  PWM Frequency:  {metrics['pwm_freq']:.2f} Hz")
+        print(f"  PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz")
+        print(f"  Deviation:      {metrics['deviation']:.2f} Hz")
+        print(f"  Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)")
         print(f"  Status:         {metrics['validation_status']}")
-        if metrics['deviation'] > 0:
-            print(f"  Deviation:      {metrics['deviation']:.2f} Hz")
         print(f"\nRESULTANT VECTOR METRICS:")
         print(f"  RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2")
         print(f"  Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2")
         print(f"  Max Amplitude:  {metrics['accel_max']:.4f} m/s^2")
-        print(f"\nREST TREMOR ANALYSIS (3-7 Hz):")
-        print(f"  Filter:         2-8 Hz (Butterworth Order 4)")
+        print(f"\nREST TREMOR ANALYSIS (2-8 Hz):")
+        print(f"  Filter:         2-8 Hz (Butterworth Order 4, filtfilt)")
         print(f"  Dominant Freq:  {metrics['dominant_freq']:.2f} Hz")
-        print(f"  Peak PSD:       {metrics['peak_power_density']:.6f}")
-        print(f"  Band Power:     {metrics['total_power']:.6f}")
+        print(f"  Peak PSD:       {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz")
+        print(f"  Band Power:     {metrics['total_power']:.6f} (m/s^2)^2")
         print("="*70 + "\n")
 
 
