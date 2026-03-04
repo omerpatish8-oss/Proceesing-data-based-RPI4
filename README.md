@@ -464,7 +464,7 @@ Resultant vector: 1 signal, N samples
   │                                      │   |peak_freq - PWM_freq| <= 0.5 Hz
   │                                      │   AND SNR >= 6 dB
   ▼                                      ▼
-                Step 9: Visualization (3 Figures, 8 subplots)
+                Step 9: Visualization (4 Figures, 10 subplots)
 ```
 
 #### Step 2: DC Offset Removal
@@ -615,7 +615,7 @@ When validation fails, the system reports the specific reason:
 
 #### Step 9: Visualization
 
-The analyzer produces 3 figures with 8 subplots:
+The analyzer produces 4 figures with 10 subplots across separate tabs:
 
 **Figure 1 — Filter Characteristics (2 subplots):**
 - Fig 1.1: Bode Magnitude — shows filter gain vs frequency for both single-pass and filtfilt
@@ -630,6 +630,10 @@ The analyzer produces 3 figures with 8 subplots:
 - Fig 3.1: PSD full range (0-20 Hz) — raw and filtered, with peak marker
 - Fig 3.2: PSD zoomed (1-12 Hz) — filtered PSD with PWM frequency line and +/-0.5 Hz tolerance band
 - Fig 3.3: Metrics and validation summary table (text) — includes SNR, noise floor, and fail reason
+
+**Figure 4 — Zoomed Time Domain (2 subplots):**
+- Fig 4.1: Filtered signal zoomed to a 3-second window from mid-recording, with Hilbert envelope and vertical lines marking expected period from dominant frequency — allows visual confirmation of the periodic waveform structure
+- Fig 4.2: Raw vs filtered overlay on the same 3-second window — shows how the bandpass filter extracts the motor vibration from the raw signal
 
 ---
 

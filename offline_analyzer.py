@@ -191,6 +191,25 @@ class TremorAnalyzerResearch:
         self.canvases.append(canvas3)
         self.all_axes.extend([self.ax_psd_full, self.ax_psd_zoom, self.ax_metrics])
 
+        # ==================== FIGURE 4: ZOOMED TIME DOMAIN ====================
+        fig4_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig4_frame, text="Figure 4 - Zoomed Signal")
+
+        self.fig4 = plt.figure(figsize=(15, 4))
+        gs4 = GridSpec(1, 2, figure=self.fig4, hspace=0.3, wspace=0.3)
+
+        self.ax_zoom_filt = self.fig4.add_subplot(gs4[0, 0])
+        self.ax_zoom_overlay = self.fig4.add_subplot(gs4[0, 1])
+
+        canvas4 = FigureCanvasTkAgg(self.fig4, master=fig4_frame)
+        canvas4.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar4 = NavigationToolbar2Tk(canvas4, fig4_frame)
+        toolbar4.update()
+
+        self.figures.append(self.fig4)
+        self.canvases.append(canvas4)
+        self.all_axes.extend([self.ax_zoom_filt, self.ax_zoom_overlay])
+
         # Initialize plots
         self.clear_all_plots()
 
@@ -621,6 +640,63 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
                             verticalalignment='top',
                             bbox=dict(boxstyle='round,pad=0.5', facecolor=bg_color, alpha=0.15))
         self.ax_metrics.set_title('Fig 3.3 - Metrics & Validation', fontweight='bold', loc='left')
+
+        # ============================================================
+        # FIGURE 4: ZOOMED TIME DOMAIN (3-second window at mid-recording)
+        # ============================================================
+
+        # Pick a 3-second window from the middle of the recording
+        zoom_duration = 3.0  # seconds
+        t_mid = t[len(t) // 2]
+        zoom_start = t_mid - zoom_duration / 2
+        zoom_end = t_mid + zoom_duration / 2
+        zoom_mask = (t >= zoom_start) & (t <= zoom_end)
+        t_zoom = t[zoom_mask]
+        filt_zoom = result_filt[zoom_mask]
+        raw_zoom = result_raw[zoom_mask]
+
+        # Expected period from dominant frequency
+        dom_freq = metrics['dominant_freq']
+        expected_period = 1.0 / dom_freq if dom_freq > 0 else 0
+
+        # Fig 4.1: Zoomed filtered signal with individual cycles
+        self.ax_zoom_filt.clear()
+        self.ax_zoom_filt.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5)
+
+        # Envelope on zoomed view
+        if len(filt_zoom) > 10:
+            env_zoom = np.abs(hilbert(filt_zoom))
+            self.ax_zoom_filt.plot(t_zoom, env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+            self.ax_zoom_filt.plot(t_zoom, -env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+
+        # Mark expected period
+        if expected_period > 0:
+            cycle_start = t_zoom[0]
+            while cycle_start + expected_period <= t_zoom[-1]:
+                self.ax_zoom_filt.axvline(x=cycle_start, color='gray', linewidth=0.5, alpha=0.4)
+                cycle_start += expected_period
+
+        self.ax_zoom_filt.set_title(
+            f'Fig 4.1 - Filtered Signal Zoomed ({zoom_duration:.0f}s) | '
+            f'Expected period: {expected_period*1000:.1f} ms ({dom_freq:.2f} Hz)',
+            fontweight='bold', fontsize=9)
+        self.ax_zoom_filt.set_ylabel('Magnitude (m/s²)')
+        self.ax_zoom_filt.set_xlabel('Time (s)')
+        self.ax_zoom_filt.grid(True, alpha=0.3)
+
+        # Fig 4.2: Zoomed raw vs filtered overlay
+        self.ax_zoom_overlay.clear()
+        self.ax_zoom_overlay.plot(t_zoom, raw_zoom, color=COL_RAW, linewidth=1,
+                                  alpha=0.5, label='Raw')
+        self.ax_zoom_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
+                                  label='Filtered (2-8 Hz)')
+        self.ax_zoom_overlay.set_title(
+            f'Fig 4.2 - Raw vs Filtered Zoomed ({zoom_duration:.0f}s)',
+            fontweight='bold', fontsize=9)
+        self.ax_zoom_overlay.set_ylabel('Magnitude (m/s²)')
+        self.ax_zoom_overlay.set_xlabel('Time (s)')
+        self.ax_zoom_overlay.grid(True, alpha=0.3)
+        self.ax_zoom_overlay.legend(fontsize=8)
 
         # Draw all canvases
         for canvas in self.canvases:
