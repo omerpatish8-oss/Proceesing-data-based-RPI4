@@ -659,6 +659,21 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
         dom_freq = metrics['dominant_freq']
         expected_period = 1.0 / dom_freq if dom_freq > 0 else 0
 
+        # Count complete cycles via rising zero-crossings
+        cycle_count = 0
+        crossing_times = []
+        if len(filt_zoom) > 1:
+            for i in range(1, len(filt_zoom)):
+                if filt_zoom[i - 1] < 0 and filt_zoom[i] >= 0:
+                    # Linear interpolation for precise crossing time
+                    frac = -filt_zoom[i - 1] / (filt_zoom[i] - filt_zoom[i - 1])
+                    t_cross = t_zoom[i - 1] + frac * (t_zoom[i] - t_zoom[i - 1])
+                    crossing_times.append(t_cross)
+                    cycle_count += 1
+
+        # Measured frequency from zero-crossing count
+        measured_freq_zc = cycle_count / zoom_duration if zoom_duration > 0 else 0
+
         # Fig 4.1: Zoomed filtered signal with individual cycles
         self.ax_zoom_filt.clear()
         self.ax_zoom_filt.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5)
@@ -669,16 +684,18 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
             self.ax_zoom_filt.plot(t_zoom, env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
             self.ax_zoom_filt.plot(t_zoom, -env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        # Mark expected period
-        if expected_period > 0:
-            cycle_start = t_zoom[0]
-            while cycle_start + expected_period <= t_zoom[-1]:
-                self.ax_zoom_filt.axvline(x=cycle_start, color='gray', linewidth=0.5, alpha=0.4)
-                cycle_start += expected_period
+        # Mark each rising zero-crossing with a numbered marker
+        for idx, t_cross in enumerate(crossing_times):
+            self.ax_zoom_filt.axvline(x=t_cross, color='#2196F3', linewidth=0.8, alpha=0.5)
+            self.ax_zoom_filt.text(t_cross, self.ax_zoom_filt.get_ylim()[1] * 0.85,
+                                   str(idx + 1), ha='center', fontsize=7, fontweight='bold',
+                                   color='#1565C0')
 
         self.ax_zoom_filt.set_title(
-            f'Fig 4.1 - Filtered Signal Zoomed ({zoom_duration:.0f}s) | '
-            f'Expected period: {expected_period*1000:.1f} ms ({dom_freq:.2f} Hz)',
+            f'Fig 4.1 - Filtered Zoomed ({zoom_duration:.0f}s) | '
+            f'Cycles: {cycle_count} | '
+            f'{cycle_count}/{zoom_duration:.0f}s = {measured_freq_zc:.2f} Hz '
+            f'(PSD: {dom_freq:.2f} Hz)',
             fontweight='bold', fontsize=9)
         self.ax_zoom_filt.set_ylabel('Magnitude (m/s²)')
         self.ax_zoom_filt.set_xlabel('Time (s)')
@@ -690,6 +707,11 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
                                   alpha=0.5, label='Raw')
         self.ax_zoom_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
                                   label='Filtered (2-8 Hz)')
+
+        # Mark zero-crossings on overlay too
+        for t_cross in crossing_times:
+            self.ax_zoom_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
+
         self.ax_zoom_overlay.set_title(
             f'Fig 4.2 - Raw vs Filtered Zoomed ({zoom_duration:.0f}s)',
             fontweight='bold', fontsize=9)

@@ -632,7 +632,7 @@ The analyzer produces 4 figures with 10 subplots across separate tabs:
 - Fig 3.3: Metrics and validation summary table (text) — includes SNR, noise floor, and fail reason
 
 **Figure 4 — Zoomed Time Domain (2 subplots):**
-- Fig 4.1: Filtered signal zoomed to a 3-second window from mid-recording, with Hilbert envelope and vertical lines marking expected period from dominant frequency — allows visual confirmation of the periodic waveform structure
+- Fig 4.1: Filtered signal zoomed to a 3-second window from mid-recording, with Hilbert envelope, numbered rising zero-crossing markers, and cycle count — displays "Cycles: N | N/3s = X.XX Hz (PSD: Y.YY Hz)" for direct visual verification of the detected frequency
 - Fig 4.2: Raw vs filtered overlay on the same 3-second window — shows how the bandpass filter extracts the motor vibration from the raw signal
 
 ---
