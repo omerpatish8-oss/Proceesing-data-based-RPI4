@@ -462,6 +462,7 @@ Resultant vector: 1 signal, N samples
   │                                      │
   │                                      │ Step 8: Input-Output Validation
   │                                      │   |peak_freq - PWM_freq| <= 0.5 Hz
+  │                                      │   AND SNR >= 6 dB
   ▼                                      ▼
                 Step 9: Visualization (3 Figures, 8 subplots)
 ```
@@ -560,6 +561,8 @@ Since log10 is monotonically increasing, the peak in linear PSD and the peak in 
 | Dominant Freq | argmax(PSD) in 2-8 Hz | Hz | Strongest frequency component |
 | Peak PSD | max(PSD) in 2-8 Hz | (m/s^2)^2/Hz | Power density at dominant frequency |
 | Band Power | integral(PSD, 2-8 Hz) | (m/s^2)^2 | Total power in tremor band |
+| Peak SNR | 10*log10(peak/noise_floor) | dB | Peak prominence above in-band noise |
+| Noise Floor | mean(PSD excl. peak +/-1 bin) | (m/s^2)^2/Hz | Average noise level in tremor band |
 
 **RMS vs Resultant Vector:**
 - Resultant vector: spatial combination (3 axes → 1 value per sample)
@@ -580,14 +583,35 @@ This gives the total signal power within the tremor band in (m/s^2)^2.
 
 #### Step 8: Input-Output Validation
 
-The user enters the motor's PWM frequency (the expected vibration frequency). The system checks whether the measured PSD peak matches:
+The user enters the motor's PWM frequency (the expected vibration frequency). The system validates two conditions:
+
+**Condition 1 — Frequency Match:**
 
 ```
-PASS criterion:  |dominant_freq - PWM_freq| <= 0.5 Hz
-FAIL criterion:  |dominant_freq - PWM_freq| >  0.5 Hz
+|dominant_freq - PWM_freq| <= 0.5 Hz
 ```
 
 The tolerance of 0.5 Hz equals 2x the frequency resolution (2 x 0.25 Hz). This is a double-sided tolerance band centered on the PWM frequency.
+
+**Condition 2 — In-Band SNR (Peak Quality):**
+
+```
+SNR = 10 * log10(peak_PSD / noise_floor) >= 6 dB
+```
+
+The in-band SNR measures whether the detected peak is a real signal or just the tallest point in a flat noise spectrum. The noise floor is computed as the mean PSD across all bins in the 2-8 Hz band, excluding the peak bin and its immediate neighbors (+/-1 bin, to account for spectral leakage). A threshold of 6 dB means the peak must be at least 4x stronger than the average noise level in the band.
+
+**Combined Validation:**
+
+```
+PASS:  frequency match AND SNR >= 6 dB
+FAIL:  either condition not met
+```
+
+When validation fails, the system reports the specific reason:
+- `freq mismatch` — peak is at the wrong frequency
+- `weak peak` — peak is at the right frequency but not prominent enough
+- `freq + weak peak` — both conditions failed
 
 #### Step 9: Visualization
 
@@ -605,7 +629,7 @@ The analyzer produces 3 figures with 8 subplots:
 **Figure 3 — Frequency Domain Analysis (3 subplots):**
 - Fig 3.1: PSD full range (0-20 Hz) — raw and filtered, with peak marker
 - Fig 3.2: PSD zoomed (1-12 Hz) — filtered PSD with PWM frequency line and +/-0.5 Hz tolerance band
-- Fig 3.3: Metrics and validation summary table (text)
+- Fig 3.3: Metrics and validation summary table (text) — includes SNR, noise floor, and fail reason
 
 ---
 

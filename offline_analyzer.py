@@ -3,7 +3,8 @@
 Rest Tremor Analysis Tool - Research-Based Implementation
 Focused on rest tremor (2-8 Hz) detection using resultant vector magnitude.
 Bandpass filter: 2-8 Hz (avoids edge attenuation at 3 and 7 Hz).
-Validation: user enters PWM frequency, system checks if PSD peak matches within +/-0.5 Hz.
+Validation: user enters PWM frequency, system checks if PSD peak matches within +/-0.5 Hz
+and if the peak SNR >= 6 dB (peak is at least 4x above in-band noise floor).
 Based on MDPI papers: Parkinson's tremor assessment with MPU6050 + ESP32
 """
 
@@ -37,6 +38,7 @@ PSD_OVERLAP = 0.5       # 50% overlap
 
 # Validation tolerance
 FREQ_TOLERANCE_HZ = 0.5 # Acceptable deviation from expected frequency
+SNR_THRESHOLD_DB = 6.0  # Minimum in-band SNR (peak must be >= 4x noise floor)
 
 # Visual styling
 COL_RAW = '#2F4F4F'         # Dark Slate Gray - Raw signal
@@ -346,32 +348,66 @@ class TremorAnalyzerResearch:
 
         # Dominant frequency and peak spectral density (within 2-8 Hz on filtered PSD)
         if np.sum(rest_mask) > 0:
-            peak_idx = np.argmax(psd_filt[rest_mask])
-            metrics['dominant_freq'] = freq[rest_mask][peak_idx]
-            metrics['peak_power_density'] = psd_filt[rest_mask][peak_idx]
+            band_psd = psd_filt[rest_mask]
+            band_freq = freq[rest_mask]
+            peak_idx = np.argmax(band_psd)
+            metrics['dominant_freq'] = band_freq[peak_idx]
+            metrics['peak_power_density'] = band_psd[peak_idx]
+
+            # In-band SNR: peak PSD vs mean of remaining bins (excluding peak +/-1)
+            noise_mask = np.ones(len(band_psd), dtype=bool)
+            for i in range(max(0, peak_idx - 1), min(len(band_psd), peak_idx + 2)):
+                noise_mask[i] = False
+            if np.sum(noise_mask) > 0:
+                noise_mean = np.mean(band_psd[noise_mask])
+                metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / max(noise_mean, 1e-12))
+                metrics['noise_floor'] = noise_mean
+            else:
+                metrics['snr_db'] = 0.0
+                metrics['noise_floor'] = 0.0
         else:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
+            metrics['snr_db'] = 0.0
+            metrics['noise_floor'] = 0.0
 
-        # Input-Output Validation: |PSD_peak - PWM_freq| <= 2 * freq_resolution (0.5 Hz)
+        # Input-Output Validation:
+        #   Condition 1: |PSD_peak - PWM_freq| <= 0.5 Hz (frequency match)
+        #   Condition 2: In-band SNR >= 6 dB (peak is real, not noise)
         measured_freq = metrics['dominant_freq']
         pwm_freq = self.pwm_freq
         deviation = abs(measured_freq - pwm_freq)
 
-        if deviation <= FREQ_TOLERANCE_HZ:
+        freq_ok = deviation <= FREQ_TOLERANCE_HZ
+        snr_ok = metrics['snr_db'] >= SNR_THRESHOLD_DB
+
+        if freq_ok and snr_ok:
             metrics['validation_status'] = "PASS"
             metrics['validation_color'] = COL_PASS
         else:
             metrics['validation_status'] = "FAIL"
             metrics['validation_color'] = COL_FAIL
 
+        # Detailed fail reason
+        if not freq_ok and not snr_ok:
+            metrics['fail_reason'] = "freq + weak peak"
+        elif not freq_ok:
+            metrics['fail_reason'] = "freq mismatch"
+        elif not snr_ok:
+            metrics['fail_reason'] = "weak peak"
+        else:
+            metrics['fail_reason'] = ""
+
         metrics['deviation'] = deviation
         metrics['pwm_freq'] = pwm_freq
 
         # Update UI
-        self.lbl_measured_freq.config(text=f"Measured: {measured_freq:.2f} Hz")
+        self.lbl_measured_freq.config(text=f"Measured: {measured_freq:.2f} Hz | SNR: {metrics['snr_db']:.1f} dB")
+        status_text = f"Status: {metrics['validation_status']}"
+        if metrics['fail_reason']:
+            status_text += f" ({metrics['fail_reason']})"
         self.lbl_validation.config(
-            text=f"Status: {metrics['validation_status']}",
+            text=status_text,
             foreground=metrics['validation_color']
         )
 
@@ -552,6 +588,7 @@ class TremorAnalyzerResearch:
         self.ax_metrics.axis('off')
 
         status_symbol = "V" if metrics['validation_status'] == "PASS" else "X"
+        fail_info = f"  ({metrics['fail_reason']})" if metrics['fail_reason'] else ""
 
         metrics_text = f"""INPUT-OUTPUT VALIDATION
 {'='*40}
@@ -559,7 +596,9 @@ PWM Frequency:  {metrics['pwm_freq']:.2f} Hz
 PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz
 Deviation:      {metrics['deviation']:.2f} Hz
 Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)
-Status:         [{status_symbol}] {metrics['validation_status']}
+Peak SNR:       {metrics['snr_db']:.1f} dB (threshold: {SNR_THRESHOLD_DB:.0f} dB)
+Noise Floor:    {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
+Status:         [{status_symbol}] {metrics['validation_status']}{fail_info}
 
 RESULTANT VECTOR METRICS
 {'='*40}
@@ -596,7 +635,10 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
         print(f"  PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz")
         print(f"  Deviation:      {metrics['deviation']:.2f} Hz")
         print(f"  Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)")
-        print(f"  Status:         {metrics['validation_status']}")
+        print(f"  Peak SNR:       {metrics['snr_db']:.1f} dB (threshold: {SNR_THRESHOLD_DB:.0f} dB)")
+        print(f"  Noise Floor:    {metrics['noise_floor']:.6f} (m/s^2)^2/Hz")
+        fail_str = f"  ({metrics['fail_reason']})" if metrics['fail_reason'] else ""
+        print(f"  Status:         {metrics['validation_status']}{fail_str}")
         print(f"\nRESULTANT VECTOR METRICS:")
         print(f"  RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2")
         print(f"  Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2")
