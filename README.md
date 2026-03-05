@@ -151,14 +151,15 @@ If all three axes change by less than `STUCK_THRESHOLD = 0.001 m/s^2` for `MAX_S
 
 The MPU6050 at ±2g range has:
 - **ADC resolution:** 16384 LSB/g → 1 LSB ≈ 0.000598 m/s^2 (~2 LSB ≈ 0.001 m/s^2)
-- **Noise density:** ~400 µg/√Hz (from MPU6050 datasheet)
-- **Effective noise** at 21 Hz DLPF bandwidth: 400 µg × √21 ≈ **1834 µg ≈ 0.018 m/s^2 RMS**
+- **Output noise (datasheet):** ~0.01g RMS ≈ **0.098 m/s^2 RMS** — this is the total RMS noise at the accelerometer output as specified by InvenSense
 
-The sensor's inherent electronic noise (~0.018 m/s^2 RMS) is roughly **18× larger** than the stuck threshold (0.001 m/s^2). This means a properly functioning sensor will **always** produce sample-to-sample fluctuations well above 0.001 m/s^2, even when the sensor is perfectly stationary. The noise is an inherent property of the MEMS sensing element and the ADC — it cannot be zero.
+The stuck threshold (0.001 m/s^2) is roughly **98× smaller** than the sensor's output noise floor (0.098 m/s^2). This is the key insight: a properly functioning MPU6050 will **always** produce sample-to-sample fluctuations well above 0.001 m/s^2, even when perfectly stationary on a table. The noise is an inherent property of the MEMS sensing element and the internal ADC — it physically cannot produce identical readings on consecutive samples.
 
-Therefore, if readings are truly identical (delta < 0.001 m/s^2 on all axes) for 15 consecutive samples at 100 Hz (150 ms), the ADC has almost certainly locked up — a known failure mode of MEMS accelerometers where the I2C data registers return stale (frozen) values. This can occur due to I2C bus glitches, power supply transients, or internal sensor state corruption. The 15-sample threshold avoids false positives: the probability of the sensor's natural noise producing 15 consecutive sub-threshold deltas on all three axes simultaneously is astronomically small.
+To put it concretely: the stuck threshold sits at ~2 LSB, while the sensor's natural noise spans ~160 LSB RMS. These two values occupy completely different orders of magnitude, which is why the stuck detector has zero false-positive risk on a healthy sensor.
 
-**Relationship to the ±2g range:** The ±2g range (±19.6 m/s^2) provides the highest ADC resolution (16384 LSB/g) but also means the lowest noise floor in absolute terms, which is advantageous for tremor measurement (typical Parkinsonian tremor amplitudes are 0.1–2.0 m/s^2). The stuck threshold at 0.001 m/s^2 (~2 LSB) sits just above quantization noise but well below sensor noise, making it effective across the entire ±2g operating range.
+Therefore, if readings are truly identical (delta < 0.001 m/s^2 on all axes) for 15 consecutive samples at 100 Hz (150 ms), the ADC has almost certainly locked up — a known failure mode of MEMS accelerometers where the I2C data registers return stale (frozen) values. This can occur due to I2C bus glitches, power supply transients, or internal sensor state corruption. The 15-sample threshold provides an additional safety margin: even if a single sample happened to coincidentally match the previous one, 15 consecutive matches across all three axes simultaneously is physically implausible for a functioning sensor.
+
+**Relationship to the ±2g range:** The ±2g range (±19.6 m/s^2) provides the highest ADC resolution (16384 LSB/g), which maximizes sensitivity for small tremor amplitudes (typical Parkinsonian tremor: 0.1–2.0 m/s^2). The tradeoff is that the ±2g range also has the lowest output noise in absolute terms (~0.098 m/s^2), but this is still nearly 100× above the stuck threshold — so the detection remains reliable. At wider ranges (±4g, ±8g, ±16g) the noise floor increases further, making stuck detection even easier, but at the cost of reduced tremor sensitivity.
 
 Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz, reinitialize MPU6050.
 
