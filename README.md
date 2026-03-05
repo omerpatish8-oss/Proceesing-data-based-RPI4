@@ -121,7 +121,9 @@ ay = a.acceleration.y - aY_off;
 az = a.acceleration.z - aZ_off;
 ```
 
-These offsets were measured with the sensor stationary on a flat surface. The Z offset (~1.046 m/s^2) partially compensates for gravity but does not fully remove it — full DC removal happens later in the offline analyzer.
+These offsets are in **m/s^2** — the Adafruit MPU6050 library converts raw LSB register values to SI units internally, so `a.acceleration.z` is already in m/s^2 before the firmware applies calibration.
+
+**What the Z offset means physically:** At rest on a flat surface (Z axis pointing up), the sensor reports ~10.86 m/s^2 on Z — this is the sum of true gravitational acceleration (~9.81 m/s^2) plus the sensor's intrinsic bias (~1.05 m/s^2). The calibration offset `aZ_off = 1.046231` removes only the sensor bias, bringing the stationary Z reading back to ~9.81 m/s^2 (gravity). It does **not** remove gravity — that is handled later by the offline analyzer's DC offset removal (per-axis mean subtraction, Step 2 in the signal processing pipeline). The X and Y offsets (~0.30 and ~0.02 m/s^2) similarly remove small biases on the horizontal axes, where the true stationary value should be 0 m/s^2.
 
 #### Sensor Safety
 
@@ -132,6 +134,31 @@ The firmware monitors sensor health continuously:
 | Stuck detection | Every sample | 15 identical readings (delta < 0.001 m/s^2) | Auto-reset sensor |
 | Read failure | Every sample | 5 consecutive failures | Auto-reset sensor |
 | Connection loss | Every 500 ms | I2C ACK missing or 2s since last read | Auto-reset sensor |
+
+##### Stuck Detection — Rationale and Relationship to Sensor Noise Floor
+
+The stuck detection logic compares each new reading against the previous one on all three axes:
+
+```cpp
+bool stuck = (abs(ax - lastAx) < STUCK_THRESHOLD &&   // 0.001 m/s^2
+              abs(ay - lastAy) < STUCK_THRESHOLD &&
+              abs(az - lastAz) < STUCK_THRESHOLD);
+```
+
+If all three axes change by less than `STUCK_THRESHOLD = 0.001 m/s^2` for `MAX_STUCK = 15` consecutive samples, the firmware declares the sensor stuck and triggers a hardware reset (I2C bus close → 150 ms wait → reinitialize).
+
+**Why 0.001 m/s^2 works — the sensor's noise floor guarantees variation:**
+
+The MPU6050 at ±2g range has:
+- **ADC resolution:** 16384 LSB/g → 1 LSB ≈ 0.000598 m/s^2 (~2 LSB ≈ 0.001 m/s^2)
+- **Noise density:** ~400 µg/√Hz (from MPU6050 datasheet)
+- **Effective noise** at 21 Hz DLPF bandwidth: 400 µg × √21 ≈ **1834 µg ≈ 0.018 m/s^2 RMS**
+
+The sensor's inherent electronic noise (~0.018 m/s^2 RMS) is roughly **18× larger** than the stuck threshold (0.001 m/s^2). This means a properly functioning sensor will **always** produce sample-to-sample fluctuations well above 0.001 m/s^2, even when the sensor is perfectly stationary. The noise is an inherent property of the MEMS sensing element and the ADC — it cannot be zero.
+
+Therefore, if readings are truly identical (delta < 0.001 m/s^2 on all axes) for 15 consecutive samples at 100 Hz (150 ms), the ADC has almost certainly locked up — a known failure mode of MEMS accelerometers where the I2C data registers return stale (frozen) values. This can occur due to I2C bus glitches, power supply transients, or internal sensor state corruption. The 15-sample threshold avoids false positives: the probability of the sensor's natural noise producing 15 consecutive sub-threshold deltas on all three axes simultaneously is astronomically small.
+
+**Relationship to the ±2g range:** The ±2g range (±19.6 m/s^2) provides the highest ADC resolution (16384 LSB/g) but also means the lowest noise floor in absolute terms, which is advantageous for tremor measurement (typical Parkinsonian tremor amplitudes are 0.1–2.0 m/s^2). The stuck threshold at 0.001 m/s^2 (~2 LSB) sits just above quantization noise but well below sensor noise, making it effective across the entire ±2g operating range.
 
 Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz, reinitialize MPU6050.
 
