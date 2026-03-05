@@ -4,13 +4,16 @@ Rest Tremor Analysis Tool - EXPERIMENTAL Version
 Based on offline_analyzer.py with the following changes:
   - No pass/fail criteria: frequency deviation and peak SNR are reported
     as informational metrics only (no PASS/FAIL judgment).
-  - Peak SNR is calculated and energy deviation from peak is reported
-    as variance of the PSD bins around the dominant frequency.
+  - Peak SNR is calculated and Dominant Power Ratio (DPR) is derived from
+    peak PSD vs total band power — shows how concentrated the energy is.
+  - Fig 2: Raw and filtered resultant vector (2 broader plots, no overlay).
+  - Fig 3.3: Enlarged metrics panel with larger font.
   - Fig 4: Zoomed filtered signal for a 5-second window (first half of a
     10-second block taken from the middle of the recording).
   - Fig 5: Zoomed filtered signal for the next consecutive 5-second window
     (second half of the same 10-second block, directly after Fig 4).
-  - Fig 6: FFT magnitude spectrum computed over the full 120-second signal.
+  - Fig 6: Single full-width FFT magnitude plot (1-12 Hz) over the full
+    120-second recording.
 """
 
 import tkinter as tk
@@ -156,16 +159,15 @@ class TremorAnalyzerExperimental:
         self.canvases.append(canvas1)
         self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase])
 
-        # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS ====================
+        # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS (2 broader plots) ====================
         fig2_frame = ttk.Frame(self.notebook)
         self.notebook.add(fig2_frame, text="Figure 2 - Resultant Vector")
 
         self.fig2 = plt.figure(figsize=(15, 4))
-        gs2 = GridSpec(1, 3, figure=self.fig2, hspace=0.3, wspace=0.3)
+        gs2 = GridSpec(1, 2, figure=self.fig2, hspace=0.3, wspace=0.3)
 
         self.ax_result_raw = self.fig2.add_subplot(gs2[0, 0])
         self.ax_result_filtered = self.fig2.add_subplot(gs2[0, 1])
-        self.ax_result_overlay = self.fig2.add_subplot(gs2[0, 2])
 
         canvas2 = FigureCanvasTkAgg(self.fig2, master=fig2_frame)
         canvas2.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -174,14 +176,16 @@ class TremorAnalyzerExperimental:
 
         self.figures.append(self.fig2)
         self.canvases.append(canvas2)
-        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay])
+        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered])
 
         # ==================== FIGURE 3: PSD ANALYSIS ====================
         fig3_frame = ttk.Frame(self.notebook)
         self.notebook.add(fig3_frame, text="Figure 3 - PSD Analysis")
 
-        self.fig3 = plt.figure(figsize=(15, 4))
-        gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.3)
+        self.fig3 = plt.figure(figsize=(15, 5))
+        # width_ratios: PSD full (2) | PSD zoom (2) | Metrics panel (3) — metrics gets more space
+        gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.35,
+                       width_ratios=[2, 2, 3])
 
         self.ax_psd_full = self.fig3.add_subplot(gs3[0, 0])
         self.ax_psd_zoom = self.fig3.add_subplot(gs3[0, 1])
@@ -234,15 +238,14 @@ class TremorAnalyzerExperimental:
         self.canvases.append(canvas5)
         self.all_axes.extend([self.ax_zoom_b_filt, self.ax_zoom_b_overlay])
 
-        # ==================== FIGURE 6: FFT OVER FULL 120s ====================
+        # ==================== FIGURE 6: FFT OVER FULL 120s (single full-width plot) ====================
         fig6_frame = ttk.Frame(self.notebook)
         self.notebook.add(fig6_frame, text="Figure 6 - FFT (Full 120s)")
 
         self.fig6 = plt.figure(figsize=(15, 4))
-        gs6 = GridSpec(1, 2, figure=self.fig6, hspace=0.3, wspace=0.3)
+        gs6 = GridSpec(1, 1, figure=self.fig6)
 
-        self.ax_fft_full = self.fig6.add_subplot(gs6[0, 0])
-        self.ax_fft_zoom = self.fig6.add_subplot(gs6[0, 1])
+        self.ax_fft_zoom = self.fig6.add_subplot(gs6[0, 0])
 
         canvas6 = FigureCanvasTkAgg(self.fig6, master=fig6_frame)
         canvas6.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -251,7 +254,7 @@ class TremorAnalyzerExperimental:
 
         self.figures.append(self.fig6)
         self.canvases.append(canvas6)
-        self.all_axes.extend([self.ax_fft_full, self.ax_fft_zoom])
+        self.all_axes.extend([self.ax_fft_zoom])
 
         # Initialize plots
         self.clear_all_plots()
@@ -381,7 +384,7 @@ class TremorAnalyzerExperimental:
 
     def calculate_metrics(self, accel_raw, accel_filt, freq, psd_filt):
         """Calculate tremor metrics - INFORMATIONAL ONLY (no pass/fail).
-        Reports frequency deviation, peak SNR, and energy variance from peak."""
+        Reports frequency deviation, peak SNR, and dominant power ratio."""
         metrics = {}
 
         # Resultant vector features
@@ -413,16 +416,20 @@ class TremorAnalyzerExperimental:
                 metrics['snr_db'] = 0.0
                 metrics['noise_floor'] = 0.0
 
-            # Energy variance: variance of PSD bin values in the 2-8 Hz band.
-            # Low variance = energy concentrated at peak; high = energy spread out.
-            metrics['energy_variance'] = np.var(band_psd)
+            # Dominant Power Ratio (DPR): fraction of total band power concentrated
+            # at the peak frequency. Derived from peak SNR.
+            # DPR = peak_psd / sum(band_psd)
+            # A DPR close to 1.0 means almost all energy is at the dominant frequency.
+            # A DPR close to 0 means energy is spread across many frequencies.
+            band_sum = np.sum(band_psd)
+            metrics['dominant_power_ratio'] = band_psd[peak_idx] / band_sum if band_sum > 0 else 0.0
 
         else:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
             metrics['snr_db'] = 0.0
             metrics['noise_floor'] = 0.0
-            metrics['energy_variance'] = 0.0
+            metrics['dominant_power_ratio'] = 0.0
 
         # Frequency deviation from PWM (informational, no pass/fail)
         measured_freq = metrics['dominant_freq']
@@ -436,7 +443,7 @@ class TremorAnalyzerExperimental:
             text=f"Measured: {measured_freq:.2f} Hz | SNR: {metrics['snr_db']:.1f} dB"
         )
         self.lbl_validation.config(
-            text=f"Deviation: {deviation:.2f} Hz | Var: {metrics['energy_variance']:.2e}",
+            text=f"Deviation: {deviation:.2f} Hz | DPR: {metrics['dominant_power_ratio']:.1%}",
             foreground=COL_INFO
         )
 
@@ -521,19 +528,6 @@ class TremorAnalyzerExperimental:
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
 
-        self.ax_result_overlay.clear()
-        self.ax_result_overlay.plot(t, result_raw, color=COL_RAW, linewidth=1,
-                                   alpha=0.5, label='Raw')
-        self.ax_result_overlay.plot(t, result_filt, color=COL_FILTERED, linewidth=1.5,
-                                   label='Filtered (2-8 Hz)')
-
-        self.ax_result_overlay.set_title('Fig 2.3 - Resultant: Raw vs Filtered', fontweight='bold')
-        self.ax_result_overlay.set_ylabel('Magnitude (m/s^2)')
-        self.ax_result_overlay.set_xlabel('Time (s)')
-        self.ax_result_overlay.grid(True, alpha=0.3)
-        self.ax_result_overlay.margins(x=0)
-        self.ax_result_overlay.legend(fontsize=8)
-
         # ============================================================
         # FIGURE 3: PSD ANALYSIS (no pass/fail coloring)
         # ============================================================
@@ -598,32 +592,32 @@ class TremorAnalyzerExperimental:
         self.ax_metrics.axis('off')
 
         metrics_text = f"""MEASUREMENT INFO (No Pass/Fail)
-{'='*40}
-PWM Frequency:     {metrics['pwm_freq']:.2f} Hz
-PSD Peak Freq:     {metrics['dominant_freq']:.2f} Hz
-Deviation:         {metrics['deviation']:.2f} Hz
-Reference:         +/-{FREQ_TOLERANCE_HZ:.2f} Hz
-Peak SNR:          {metrics['snr_db']:.1f} dB
-Noise Floor:       {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
-Energy Variance:   {metrics['energy_variance']:.2e} (m/s^2)^4/Hz^2
+{'='*44}
+PWM Frequency:       {metrics['pwm_freq']:.2f} Hz
+PSD Peak Freq:       {metrics['dominant_freq']:.2f} Hz
+Deviation:           {metrics['deviation']:.2f} Hz
+Reference:           +/-{FREQ_TOLERANCE_HZ:.2f} Hz
+Peak SNR:            {metrics['snr_db']:.1f} dB
+Noise Floor:         {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
+Dom. Power Ratio:    {metrics['dominant_power_ratio']:.1%}
 
 RESULTANT VECTOR METRICS
-{'='*40}
-RMS Amplitude:     {metrics['accel_rms']:.4f} m/s^2
-Mean Amplitude:    {metrics['accel_mean']:.4f} m/s^2
-Max Amplitude:     {metrics['accel_max']:.4f} m/s^2
+{'='*44}
+RMS Amplitude:       {metrics['accel_rms']:.4f} m/s^2
+Mean Amplitude:      {metrics['accel_mean']:.4f} m/s^2
+Max Amplitude:       {metrics['accel_max']:.4f} m/s^2
 
 REST TREMOR ANALYSIS (2-8 Hz)
-{'='*40}
-Dominant Freq:     {metrics['dominant_freq']:.2f} Hz
-Peak PSD:          {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
-Band Power:        {metrics['total_power']:.6f} (m/s^2)^2
-Filter:            2-8 Hz (Butterworth O4, filtfilt)
+{'='*44}
+Dominant Freq:       {metrics['dominant_freq']:.2f} Hz
+Peak PSD:            {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
+Band Power:          {metrics['total_power']:.6f} (m/s^2)^2
+Filter:              2-8 Hz (Butterworth O4, filtfilt)
 """
 
-        self.ax_metrics.text(0.05, 0.95, metrics_text,
+        self.ax_metrics.text(0.03, 0.97, metrics_text,
                             transform=self.ax_metrics.transAxes,
-                            fontfamily='monospace', fontsize=8,
+                            fontfamily='monospace', fontsize=9.5,
                             verticalalignment='top',
                             bbox=dict(boxstyle='round,pad=0.5', facecolor=COL_INFO, alpha=0.15))
         self.ax_metrics.set_title('Fig 3.3 - Metrics (Informational)', fontweight='bold', loc='left')
@@ -684,7 +678,7 @@ Filter:            2-8 Hz (Butterworth O4, filtfilt)
         print(f"  Reference:         +/-{FREQ_TOLERANCE_HZ:.2f} Hz")
         print(f"  Peak SNR:          {metrics['snr_db']:.1f} dB")
         print(f"  Noise Floor:       {metrics['noise_floor']:.6f} (m/s^2)^2/Hz")
-        print(f"  Energy Variance:   {metrics['energy_variance']:.2e} (m/s^2)^4/Hz^2")
+        print(f"  Dom. Power Ratio:  {metrics['dominant_power_ratio']:.1%}")
         print(f"\nRESULTANT VECTOR METRICS:")
         print(f"  RMS Amplitude:     {metrics['accel_rms']:.4f} m/s^2")
         print(f"  Mean Amplitude:    {metrics['accel_mean']:.4f} m/s^2")
@@ -789,19 +783,14 @@ Filter:            2-8 Hz (Butterworth O4, filtfilt)
     def _plot_fft_full(self, result_filt, result_raw, metrics):
         """Compute and plot FFT magnitude spectrum over the full recording.
 
-        Two subplots:
-          6.1 - Full FFT spectrum (0 to Nyquist) with raw + filtered overlay
-          6.2 - FFT zoomed into the 1-12 Hz range with peak annotation
+        Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
         """
         N = len(result_filt)
 
-        # Compute FFT of filtered and raw signals
+        # Compute FFT of filtered signal
         fft_vals = np.fft.rfft(result_filt)
         fft_freqs = np.fft.rfftfreq(N, d=1.0/FS)
         fft_magnitude = np.abs(fft_vals) / N  # Normalize by sample count
-
-        fft_vals_raw = np.fft.rfft(result_raw)
-        fft_magnitude_raw = np.abs(fft_vals_raw) / N
 
         # Find peak in the 2-8 Hz band on the filtered FFT
         band_mask = (fft_freqs >= FREQ_REST_LOW) & (fft_freqs <= FREQ_REST_HIGH)
@@ -815,31 +804,7 @@ Filter:            2-8 Hz (Butterworth O4, filtfilt)
             fft_peak_freq = 0
             fft_peak_mag = 0
 
-        # -- Fig 6.1: Full FFT spectrum (0 to Nyquist) --
-        self.ax_fft_full.clear()
-        self.ax_fft_full.plot(fft_freqs, fft_magnitude_raw, color=COL_RAW,
-                             linewidth=0.8, alpha=0.5, label='Raw FFT')
-        self.ax_fft_full.plot(fft_freqs, fft_magnitude, color=COL_FILTERED,
-                             linewidth=1.2, label='Filtered FFT')
-
-        self.ax_fft_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
-                                color='yellow', alpha=0.15, label='2-8 Hz band')
-
-        if fft_peak_freq > 0:
-            self.ax_fft_full.plot(fft_peak_freq, fft_peak_mag, 'o',
-                                color='red', markersize=8,
-                                label=f'Peak: {fft_peak_freq:.2f} Hz')
-
-        self.ax_fft_full.set_title(
-            f'Fig 6.1 - FFT Magnitude (Full {N/FS:.0f}s Recording)',
-            fontweight='bold')
-        self.ax_fft_full.set_xlabel('Frequency (Hz)')
-        self.ax_fft_full.set_ylabel('Magnitude (m/s\u00b2)')
-        self.ax_fft_full.set_xlim(0, FS/2)
-        self.ax_fft_full.grid(True, alpha=0.3)
-        self.ax_fft_full.legend(fontsize=7)
-
-        # -- Fig 6.2: FFT zoomed into 1-12 Hz --
+        # -- Fig 6: FFT zoomed into 1-12 Hz (full-width single plot) --
         self.ax_fft_zoom.clear()
         self.ax_fft_zoom.plot(fft_freqs, fft_magnitude, color=COL_FILTERED,
                              linewidth=1.5, label='Filtered FFT')
@@ -857,7 +822,7 @@ Filter:            2-8 Hz (Butterworth O4, filtfilt)
                                 label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
 
         self.ax_fft_zoom.set_title(
-            f'Fig 6.2 - FFT Zoomed (1-12 Hz) | Peak: {fft_peak_freq:.2f} Hz',
+            f'Fig 6 - FFT (1-12 Hz, Full {N/FS:.0f}s) | Peak: {fft_peak_freq:.2f} Hz',
             fontweight='bold')
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
