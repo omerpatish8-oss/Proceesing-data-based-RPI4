@@ -416,13 +416,18 @@ class TremorAnalyzerExperimental:
                 metrics['snr_db'] = 0.0
                 metrics['noise_floor'] = 0.0
 
-            # Dominant Power Ratio (DPR): fraction of total band power concentrated
-            # at the peak frequency. Derived from peak SNR.
-            # DPR = peak_psd / sum(band_psd)
-            # A DPR close to 1.0 means almost all energy is at the dominant frequency.
-            # A DPR close to 0 means energy is spread across many frequencies.
-            band_sum = np.sum(band_psd)
-            metrics['dominant_power_ratio'] = band_psd[peak_idx] / band_sum if band_sum > 0 else 0.0
+            # Dominant Power Ratio (DPR): integrated power in a small window
+            # around the peak (+/-1 bin = +/-0.25 Hz), divided by total band
+            # power. Both use trapz for consistent area-under-curve integration.
+            # DPR = trapz(PSD[peak-1..peak+1]) / trapz(PSD[2-8 Hz])
+            pk_lo = max(0, peak_idx - 1)
+            pk_hi = min(len(band_psd), peak_idx + 2)  # exclusive end
+            peak_power = np.trapz(band_psd[pk_lo:pk_hi], band_freq[pk_lo:pk_hi])
+            # total_power already computed above via trapz over the full band
+            metrics['dominant_power_ratio'] = (
+                peak_power / metrics['total_power']
+                if metrics['total_power'] > 0 else 0.0
+            )
 
         else:
             metrics['dominant_freq'] = 0

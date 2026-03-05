@@ -794,15 +794,19 @@ The +/-1 bin exclusion (3 bins total = 0.75 Hz) accounts for spectral leakage ar
 
 ##### Step 8: Dominant Power Ratio (DPR)
 
-**What:** The fraction of total in-band PSD power that is concentrated at the dominant frequency bin.
+**What:** The fraction of total in-band power that is concentrated in a small window around the dominant frequency (+/-1 bin = +/-0.25 Hz, i.e. 3 bins / 0.75 Hz wide).
 
 **Math:**
 
 ```
-DPR = PSD_peak / SUM( PSD[all bins in 2-8 Hz] )
+peak_power = trapz( PSD[peak-1 .. peak+1], freq[peak-1 .. peak+1] )
+band_power = trapz( PSD[2-8 Hz],           freq[2-8 Hz]           )
+DPR        = peak_power / band_power
 ```
 
-**Why:** DPR is derived from the same peak PSD value used for SNR, but expressed as a ratio to total band energy rather than to the noise floor. It answers: "What percentage of the tremor-band energy is at the dominant frequency?"
+Both numerator and denominator use trapezoidal integration (`np.trapz`), so both are in consistent units of (m/s^2)^2 (integrated power). The ratio is dimensionless.
+
+**Why:** DPR answers: "What percentage of the tremor-band energy is concentrated at the dominant frequency?"
 
 - **DPR close to 1.0 (100%)**: Nearly all energy is concentrated at a single frequency — strong, clean periodic signal
 - **DPR close to 0**: Energy is spread evenly across the band — no dominant frequency, noise-like signal
