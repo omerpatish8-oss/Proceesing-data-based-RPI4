@@ -1,1385 +1,1125 @@
-# Tremor Data Acquisition System - RPI4 & ESP32
+# Parkinson's Rest Tremor Detection System
 
-A robust data acquisition system for capturing and analyzing tremor/motion data using Raspberry Pi 4 and ESP32 with MPU6050 sensor. Designed for medical research and Parkinson's disease tremor analysis.
-
----
-
-## 🎯 Project Overview
-
-This system enables:
-- **High-frequency data collection** at 100 Hz sampling rate
-- **Real-time sensor monitoring** with automatic error detection
-- **Cycle-based recording** with pause/resume capability
-- **Data quality validation** and comprehensive error logging
-- **USB Serial communication** between ESP32 and Raspberry Pi
+A complete data acquisition and signal processing pipeline for detecting and validating rest tremor (2-8 Hz) using Raspberry Pi 4, ESP32, and MPU6050 accelerometer. Designed for Parkinson's disease research and input-output validation against a known vibration source.
 
 ---
 
-## 🔧 Hardware Requirements
+## System Overview
+
+```
+┌──────────────┐    I2C     ┌──────────────┐   USB UART   ┌──────────────┐
+│   MPU6050    │──────────→ │    ESP32     │────────────→ │    RPI 4     │
+│  (Sensor)    │  400 kHz   │  (Sampler)   │  115200 baud │  (Recorder)  │
+│  +/-2G       │  SDA/SCL   │  100 Hz      │  ~30 B/line  │  CSV output  │
+└──────────────┘            └──────────────┘              └──────┬───────┘
+                                                                 │
+                            ┌──────────────┐              ┌──────┴───────┐
+                            │  DC Motor    │◄─────────────│  Motor PWM   │
+                            │  + Eccentric │   GPIO 18    │  (L298N)     │
+                            │    Mass      │   1 kHz PWM  │  Open loop   │
+                            └──────────────┘              └──────────────┘
+                                                                 │
+                                                          ┌──────┴───────┐
+                                                          │   Offline    │
+                                                          │  Analyzer    │
+                                                          │  (Tkinter)   │
+                                                          └──────────────┘
+```
+
+### Scripts
+
+| Script | Runs On | Role |
+|--------|---------|------|
+| `esp32_usb_serial_safe.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
+| `rpi_usb_recorder_v2.py` | RPI 4 | Receives UART data, validates, writes CSV files |
+| `motor_control.py` | RPI 4 | Controls DC motor via L298N driver (PWM on GPIO18) |
+| `offline_analyzer.py` | PC/RPI 4 | Signal processing, PSD analysis, input-output validation |
+| `offline_analyzer_exp.py` | PC/RPI 4 | Experimental analyzer: no pass/fail, DPR metric, consecutive 5s zoom, full FFT |
+| `sys_manager.py` | RPI 4 | Orchestrates motor + recorder in parallel using threading |
+
+---
+
+## Hardware
 
 ### Components
-- **Raspberry Pi 4** (data recorder and processor)
-- **ESP32 Development Board** (sensor interface)
-- **MPU6050** IMU sensor (accelerometer + gyroscope)
-- **SSD1306 OLED Display** (128x64, for ESP32 feedback)
-- **Push Button** (for start/pause/resume control)
-- **LEDs** (Green and Red for status indication)
-- **USB Cable** (ESP32 to RPI4 connection)
-
-### Wiring (ESP32)
-```
-MPU6050:
-  - SDA → GPIO 21
-  - SCL → GPIO 22
-  - VCC → 3.3V
-  - GND → GND
-
-SSD1306 Display:
-  - SDA → GPIO 18
-  - SCL → GPIO 19
-  - VCC → 3.3V
-  - GND → GND
-
-Control:
-  - Button → GPIO 13 (with internal pull-up)
-  - Green LED → GPIO 15
-  - Red LED → GPIO 2
-```
-
----
-
-## 📊 System Architecture
-
-### Data Pipeline
-
-```
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│   MPU6050   │──I²C──│    ESP32    │──USB──│   RPI4      │
-│   Sensor    │       │  (Sampler)  │       │ (Recorder)  │
-└─────────────┘       └─────────────┘       └─────────────┘
-      │                      │                      │
-   100 Hz              Preprocessing           Validation
-   Reading             Error Detection         Error Logging
-                      Freeze Detection         CSV Output
-                      Auto-reset              Log Files
-```
-
-### Software Components
-
-#### 1. **ESP32 Firmware** (`esp32_usb_serial_safe.ino`)
-**Responsibilities:**
-- Sample MPU6050 at 100 Hz (10ms intervals)
-- Apply calibration offsets
-- Detect sensor freeze (15 consecutive identical readings)
-- Auto-reset sensor on failures
-- Manage recording state machine (IDLE → RECORDING → PAUSED → FINISHED)
-- Transmit data via USB Serial at 115200 baud
-
-**Key Features:**
-- **Stopwatch-style timing**: Accumulates recording time across pause/resume
-- **Sensor health monitoring**: Detects stuck sensor, read failures, connection loss
-- **Automatic recovery**: Resets sensor on error with up to 3 retry attempts
-- **User control**: Single button for start/pause/resume
-
-**Protocol Messages:**
-| Message | Direction | Purpose |
-|---------|-----------|---------|
-| `START_RECORDING` | ESP32 → RPI | Recording started |
-| `CYCLE,<N>` | ESP32 → RPI | Cycle number N started |
-| `PAUSE_CYCLE` | ESP32 → RPI | Recording paused |
-| `RESUME_CYCLE` | ESP32 → RPI | Recording resumed |
-| `END_RECORDING` | ESP32 → RPI | Cycle complete |
-| `ALL_COMPLETE` | ESP32 → RPI | All cycles finished |
-| `ERROR_SENSOR_STUCK` | ESP32 → RPI | 15 constant samples detected |
-| `ERROR_SENSOR_LOST` | ESP32 → RPI | Sensor connection lost |
-| `ERROR_READ_FAILED` | ESP32 → RPI | Sensor read failed |
-| `SENSOR_RESET,<N>` | ESP32 → RPI | Sensor reset #N occurred |
-| `SENSOR_RESET_OK` | ESP32 → RPI | Reset successful |
-| `SENSOR_RESET_FAILED` | ESP32 → RPI | Reset failed |
-| `RESETS,<N>` | ESP32 → RPI | Total resets summary |
-
-**Data Format (CSV over Serial):**
-```
-Timestamp,Ax,Ay,Az,Gx,Gy,Gz
-0,0.580,-0.200,-1.230,22.360,5.810,0.170
-10,0.582,-0.198,-1.228,22.358,5.808,0.168
-...
-```
-- **Timestamp**: Milliseconds since cycle start (continuous across pause/resume)
-- **Ax, Ay, Az**: Acceleration (m/s²) with calibration applied
-- **Gx, Gy, Gz**: Gyroscope (°/s) with calibration applied
-
----
-
-### ESP32 Internal Architecture
-
-#### State Machine Implementation
-
-The ESP32 firmware implements a **finite state machine** with 5 states:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     ESP32 STATE MACHINE                       │
-└──────────────────────────────────────────────────────────────┘
-
-    ┌─────────┐
-    │  IDLE   │◄──────────────┐
-    └────┬────┘               │
-         │ Button Press       │
-         ▼                    │ All Cycles Complete
-    ┌──────────┐              │
-    │RECORDING │              │
-    └────┬─────┘              │
-         │ Button Press       │
-         ▼                    │
-    ┌─────────┐               │
-    │ PAUSED  │               │
-    └────┬────┘               │
-         │ Button Press       │
-         ▼ (Resume)           │
-    ┌──────────┐              │
-    │RECORDING │              │
-    └────┬─────┘              │
-         │ Duration Complete  │
-         ▼                    │
-    ┌────────────┐            │
-    │WAITING_NEXT│────────────┤
-    └─────┬──────┘            │
-          │ Button Press      │
-          └──►Back to IDLE    │
-              or RECORDING    │
-                              │
-    ┌─────────┐               │
-    │FINISHED │───────────────┘
-    └─────────┘
-```
-
-**State Definitions:**
-
-| State | Behavior | LED | Display | Next State Trigger |
-|-------|----------|-----|---------|-------------------|
-| **IDLE** | Waiting to start | Green (slow blink, 1s) | "READY\nPress button" | Button → RECORDING |
-| **RECORDING** | Active sampling at 100Hz | Green (fast blink, 200ms) | "Recording N\n<time>" | Button → PAUSED or Duration complete → WAITING_NEXT |
-| **PAUSED** | Timer frozen, no sampling | Red (blink, 800ms) | "PAUSED N\n<time>" | Button → RECORDING (resume) |
-| **WAITING_NEXT** | Cycle complete, ready for next | Red (fast blink, 500ms) | "DONE\nPress for Next" | Button → RECORDING (next cycle) or Max cycles → FINISHED |
-| **FINISHED** | All cycles complete | Green (solid) | "FINISHED\nAll cycles done" | None (terminal state) |
-
-**State Variables:**
-```cpp
-enum State { IDLE, RECORDING, PAUSED, WAITING_NEXT, FINISHED };
-State currentState = IDLE;
-
-int currentCycle = 0;              // Current cycle number
-const int MAX_CYCLES = 2;          // Total cycles to record
-
-unsigned long segmentStartTime;    // When current segment started
-unsigned long accumulatedTime;     // Total recording time so far
-unsigned long currentTotalTime;    // Real-time total (accumulated + current segment)
-```
-
-**Stopwatch Timing Logic:**
-```cpp
-// On START_RECORDING:
-segmentStartTime = millis();       // Mark start of this segment
-accumulatedTime = 0;               // Reset accumulated time
-currentTotalTime = 0;              // Reset total
-
-// During RECORDING (every loop):
-currentTotalTime = accumulatedTime + (millis() - segmentStartTime);
-
-// On PAUSE:
-accumulatedTime += (millis() - segmentStartTime);  // Save elapsed time
-currentTotalTime = accumulatedTime;                 // Freeze at current total
-
-// On RESUME:
-segmentStartTime = millis();       // Start new segment
-// accumulatedTime stays the same - preserves previous time
-// currentTotalTime continues from accumulated value
-```
-
-**Example Timing Scenario:**
-```
-Action          | segmentStartTime | accumulatedTime | currentTotalTime
-----------------|------------------|-----------------|------------------
-START           | 1000             | 0               | 0
-Recording (5s)  | 1000             | 0               | 5000
-PAUSE at 5s     | 1000             | 5000            | 5000 (frozen)
-Wait 10s...     | 1000             | 5000            | 5000 (still frozen)
-RESUME          | 16000            | 5000            | 5000 (continues)
-Recording (3s)  | 16000            | 5000            | 8000
-END at 8s       | 16000            | 5000            | 8000
-
-Result: 8 seconds of actual recording time, timestamps 0-8000ms continuous
-```
-
----
-
-#### I²C Hardware Communication Protocol
-
-The ESP32 communicates with two I²C devices on separate buses:
-
-**I²C Bus 1 (Wire)** - MPU6050 Sensor
-- **SDA:** GPIO 21
-- **SCL:** GPIO 22
-- **Speed:** 400 kHz (Fast Mode)
-- **Address:** 0x68 (MPU6050 default)
-
-**I²C Bus 2 (Wire1)** - SSD1306 Display
-- **SDA:** GPIO 18
-- **SCL:** GPIO 19
-- **Speed:** 400 kHz (Fast Mode)
-- **Address:** 0x3C (SSD1306 default)
-
-**MPU6050 Communication Sequence:**
-
-```cpp
-// 1. Initialization (setup)
-Wire.begin(21, 22);                    // Initialize I²C on GPIO 21/22
-Wire.setClock(400000);                 // Set 400kHz speed
-
-mpu.begin();                           // Initialize MPU6050
-mpu.setAccelerometerRange(MPU6050_RANGE_4_G);   // ±4g range
-mpu.setGyroRange(MPU6050_RANGE_500_DEG);        // ±500°/s range
-mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);     // 21Hz low-pass filter
-
-// 2. Health Check (every 500ms during recording)
-Wire.beginTransmission(0x68);          // Start I²C transaction to MPU6050
-bool connected = (Wire.endTransmission() == 0);  // 0 = ACK received
-
-// 3. Data Reading (every 10ms during recording)
-sensors_event_t a, g, temp;
-bool success = mpu.getEvent(&a, &g, &temp);     // Read all sensor data
-// Internally sends I²C commands:
-//   - Read register 0x3B-0x40 (14 bytes): accel + temp + gyro
-
-// 4. Sensor Reset (on error)
-Wire.end();                            // Close I²C bus
-delay(150);                            // Wait for sensor to power down
-Wire.begin(21, 22);                    // Reinitialize I²C
-Wire.setClock(400000);
-mpu.begin();                           // Reinitialize MPU6050
-```
-
-**I²C Transaction Example (Reading Acceleration):**
-```
-Master (ESP32)          Slave (MPU6050)
--------------------------------------------------
-START condition      →
-Device Address 0x68  → ACK
-Register 0x3B (ACCEL_XOUT_H) → ACK
-RESTART condition    →
-Device Address 0x68  → ACK
-                     ← ACCEL_XOUT_H data (8 bits)
-ACK                  →
-                     ← ACCEL_XOUT_L data (8 bits)
-ACK                  →
-                     ← ACCEL_YOUT_H data (8 bits)
-... (6 bytes total for X, Y, Z)
-STOP condition       →
-```
-
-**SSD1306 Display Communication:**
-```cpp
-// Initialization
-Wire1.begin(18, 19);                   // Initialize I²C on GPIO 18/19
-Wire1.setClock(400000);
-display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // Initialize display at address 0x3C
-
-// Update Display (every 1s)
-display.clearDisplay();                // Clear frame buffer
-display.setCursor(0, 0);
-display.print("Recording 1");          // Write to buffer
-display.display();                     // Send buffer to display via I²C
-// Internally sends ~1KB of data to refresh entire 128x64 pixel screen
-```
-
----
-
-#### Recording Sequence - Complete Flow
-
-Here's the detailed step-by-step sequence from power-on to data recording:
-
-##### **Phase 1: System Initialization** (0-5 seconds)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. ESP32 Boot                                                    │
-└─────────────────────────────────────────────────────────────────┘
-[0ms] Power applied to ESP32
-[100ms] ESP32 bootloader starts
-[500ms] Arduino setup() begins
-[500ms] Serial.begin(115200) - USB serial initialized
-[500ms] Print banner to serial:
-         ╔════════════════════════════════════╗
-         ║ Parkinson's System - USB Serial ║
-         ╚════════════════════════════════════╝
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. GPIO Initialization                                           │
-└─────────────────────────────────────────────────────────────────┘
-[600ms] pinMode(PIN_GREEN, OUTPUT)    - GPIO 15 as output
-[600ms] pinMode(PIN_RED, OUTPUT)      - GPIO 2 as output
-[600ms] pinMode(PIN_BUTTON, INPUT_PULLUP) - GPIO 13 with pull-up
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Display Initialization (I²C Bus 2)                           │
-└─────────────────────────────────────────────────────────────────┘
-[700ms] Wire1.begin(18, 19)           - Initialize I²C1
-[700ms] Wire1.setClock(400000)        - Set 400kHz
-[750ms] display.begin(0x3C)           - Initialize SSD1306
-[750ms]   ├─ I²C: Send initialization commands
-[750ms]   ├─ I²C: Set contrast, charge pump, etc.
-[800ms]   └─ I²C: Clear display memory
-[800ms] Serial: "[OK] Display ready"
-[850ms] display.clearDisplay()
-[850ms] display.print("READY")
-[900ms] display.display()             - I²C: Send framebuffer to screen
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. MPU6050 Initialization (I²C Bus 1)                           │
-└─────────────────────────────────────────────────────────────────┘
-[1000ms] Wire.begin(21, 22)           - Initialize I²C0
-[1000ms] Wire.setClock(400000)        - Set 400kHz
-[1050ms] mpu.begin()                  - Initialize MPU6050
-[1050ms]   ├─ I²C: Detect device at 0x68
-[1100ms]   ├─ I²C: Read WHO_AM_I register (should be 0x68)
-[1150ms]   ├─ I²C: Wake up sensor (PWR_MGMT_1 = 0x00)
-[1200ms]   └─ I²C: Configure registers
-[1250ms] mpu.setAccelerometerRange(MPU6050_RANGE_4_G)
-[1250ms]   └─ I²C: Write to ACCEL_CONFIG register
-[1300ms] mpu.setGyroRange(MPU6050_RANGE_500_DEG)
-[1300ms]   └─ I²C: Write to GYRO_CONFIG register
-[1350ms] mpu.setFilterBandwidth(MPU6050_BAND_21_HZ)
-[1350ms]   └─ I²C: Write to CONFIG register
-[1400ms] Serial: "[OK] Sensor ready"
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. Ready State                                                   │
-└─────────────────────────────────────────────────────────────────┘
-[1500ms] currentState = IDLE
-[1500ms] Serial: "SYSTEM_READY"
-[1500ms] Serial: "[READY] Press button to start"
-[1500ms] Green LED: Start blinking (1Hz)
-[1500ms] Display shows: "READY\nPress button\nto start"
-[1500ms] RPI Python script connects and shows:
-         ✅ Connected!
-         🎬 Waiting for ESP32 to start recording...
-```
-
----
-
-##### **Phase 2: Recording Start** (User presses button)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Button Press Detection                                        │
-└─────────────────────────────────────────────────────────────────┘
-[T+0ms] loop() detects: digitalRead(PIN_BUTTON) == LOW
-[T+0ms] Debounce check: millis() - lastDebounceTime > 500ms ✓
-[T+0ms] currentState == IDLE ✓
-[T+0ms] Call startRecording()
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. State Transition: IDLE → RECORDING                           │
-└─────────────────────────────────────────────────────────────────┘
-[T+0ms] currentCycle++                    (now = 1)
-[T+0ms] currentState = RECORDING
-[T+0ms] segmentStartTime = millis()      (e.g., 10000ms)
-[T+0ms] accumulatedTime = 0
-[T+0ms] currentTotalTime = 0
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Protocol Messages to RPI                                     │
-└─────────────────────────────────────────────────────────────────┘
-[T+1ms] Serial.println("START_RECORDING")
-[T+2ms] Serial.printf("CYCLE,%d\n", 1)
-[T+3ms] Serial.println("Timestamp,Ax,Ay,Az,Gx,Gy,Gz")  // CSV header
-
-RPI receives:
-├─ Detects "START_RECORDING" → sets recording=True
-├─ Detects "CYCLE,1" → Creates CSV file:
-│    tremor_data/tremor_cycle1_20260119_183000.csv
-│    tremor_data/tremor_cycle1_20260119_183000.log
-└─ Writes CSV header with metadata:
-     # Cycle: 1
-     # Start Time: 2026-01-19 18:30:00
-     # Sample Rate: 100 Hz
-     Timestamp,Ax,Ay,Az,Gx,Gy,Gz
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. Visual Feedback                                               │
-└─────────────────────────────────────────────────────────────────┘
-[T+5ms] Green LED: Fast blink (200ms interval)
-[T+10ms] Display update:
-          ┌──────────────┐
-          │ Recording 1  │
-          │  100Hz       │
-          │              │
-          │     120s     │  ← Countdown timer
-          └──────────────┘
-```
-
----
-
-##### **Phase 3: Active Recording Loop** (Every 10ms for 120s)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Main Loop Iteration (Runs every ~10ms)                          │
-└─────────────────────────────────────────────────────────────────┘
-
-[T+10ms] Calculate current time:
-         currentTotalTime = accumulatedTime + (millis() - segmentStartTime)
-         currentTotalTime = 0 + (10010 - 10000) = 10ms
-
-┌─────────────────────────────────────────────────────────────────┐
-│ Sample Sensor (if 10ms elapsed since last sample)               │
-└─────────────────────────────────────────────────────────────────┘
-[T+10ms] Check: millis() - lastSampleTime >= 10ms ✓
-[T+10ms] lastSampleTime = millis()
-[T+10ms] Call sampleSensor()
-
-  ┌─────────────────────────────────────────────────────────────┐
-  │ sampleSensor() Function                                      │
-  └─────────────────────────────────────────────────────────────┘
-  [T+10ms] sensors_event_t a, g, temp;
-  [T+11ms] I²C Transaction: mpu.getEvent(&a, &g, &temp)
-           ├─ I²C: Read 0x3B (ACCEL_XOUT_H)
-           ├─ I²C: Read 6 bytes (accel X, Y, Z)
-           ├─ I²C: Read 2 bytes (temperature)
-           └─ I²C: Read 6 bytes (gyro X, Y, Z)
-  [T+12ms] Check if read successful
-  [T+12ms] failedReads = 0 (success)
-  [T+12ms] lastSuccessfulRead = millis()
-
-  [T+13ms] Apply calibration offsets:
-           ax = a.acceleration.x - aX_off
-           ay = a.acceleration.y - aY_off
-           az = a.acceleration.z - aZ_off
-           gx = (g.gyro.x * 57.296) - gX_off  // Convert rad/s to deg/s
-           gy = (g.gyro.y * 57.296) - gY_off
-           gz = (g.gyro.z * 57.296) - gZ_off
-
-  [T+14ms] Freeze Detection:
-           stuck = (|ax - lastAx| < 0.001 &&
-                    |ay - lastAy| < 0.001 &&
-                    |az - lastAz| < 0.001)
-           If stuck: stuckCount++
-           If stuckCount >= 15:
-             └─ Serial.println("ERROR_SENSOR_STUCK")
-             └─ Call resetSensor()
-           Else: stuckCount = 0
-
-  [T+15ms] Update last values:
-           lastAx = ax, lastAy = ay, lastAz = az
-
-  [T+15ms] Transmit to RPI via USB Serial:
-           Serial.printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                         currentTotalTime, ax, ay, az, gx, gy, gz)
-           Example: "10,0.582,-0.198,-1.228,22.358,5.808,0.168"
-
-┌─────────────────────────────────────────────────────────────────┐
-│ RPI Receives Data                                                │
-└─────────────────────────────────────────────────────────────────┘
-[T+16ms] RPI: readline() receives: "10,0.582,-0.198,-1.228,22.358,5.808,0.168"
-[T+16ms] RPI: Validate format (7 columns, numeric) ✓
-[T+16ms] RPI: csv_file.write(line + '\n')
-[T+16ms] RPI: csv_file.flush()
-[T+16ms] RPI: data_count++ (now = 1)
-[T+16ms] RPI: last_data_time = time.time()  // Reset timeout
-
-┌─────────────────────────────────────────────────────────────────┐
-│ Sensor Health Check (Every 500ms)                               │
-└─────────────────────────────────────────────────────────────────┘
-[T+500ms] Check: millis() - lastSensorCheck >= 500ms ✓
-[T+500ms] lastSensorCheck = millis()
-[T+500ms] Wire.beginTransmission(0x68)
-[T+501ms] I²C: Send START + Address 0x68
-[T+502ms] I²C: Receive ACK from MPU6050 ✓
-[T+502ms] connected = (Wire.endTransmission() == 0) = true
-[T+502ms] Check: millis() - lastSuccessfulRead < 2000ms ✓
-[T+502ms] Sensor is healthy ✓
-
-┌─────────────────────────────────────────────────────────────────┐
-│ Display Update (Every 1000ms)                                    │
-└─────────────────────────────────────────────────────────────────┘
-[T+1000ms] Check: millis() - lastScreenUpdate >= 1000ms ✓
-[T+1000ms] lastScreenUpdate = millis()
-[T+1000ms] Calculate remaining time:
-           remaining = (120000 - currentTotalTime) / 1000 = 119s
-[T+1001ms] display.clearDisplay()
-[T+1002ms] display.print("Recording 1\n100Hz")
-[T+1003ms] display.print("119s")  // Large font
-[T+1010ms] display.display()  // I²C: Send framebuffer to screen
-
-┌─────────────────────────────────────────────────────────────────┐
-│ LED Blink (Every 200ms)                                          │
-└─────────────────────────────────────────────────────────────────┘
-[T+200ms] Check: millis() - lastLedBlink >= 200ms ✓
-[T+200ms] lastLedBlink = millis()
-[T+200ms] digitalWrite(PIN_GREEN, !digitalRead(PIN_GREEN))  // Toggle
-
-┌─────────────────────────────────────────────────────────────────┐
-│ RPI Progress Display (Every 1s / 100 samples)                   │
-└─────────────────────────────────────────────────────────────────┘
-[T+1000ms] RPI: data_count = 100 (100 samples received)
-[T+1000ms] RPI: Print "   📊   100 samples |    1.0s"
-[T+2000ms] RPI: Print "   📊   200 samples |    2.0s"
-... continues every 100 samples
-```
-
-**This loop repeats ~12,000 times over 120 seconds**
-
----
-
-##### **Phase 4: Pause Operation** (Optional - User presses button)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Button Press During Recording                                │
-└─────────────────────────────────────────────────────────────────┘
-[T+5000ms] User presses button (at 5 seconds into recording)
-[T+5000ms] loop() detects: digitalRead(PIN_BUTTON) == LOW
-[T+5000ms] Debounce check: millis() - lastDebounceTime > 500ms ✓
-[T+5000ms] currentState == RECORDING ✓
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. State Transition: RECORDING → PAUSED                         │
-└─────────────────────────────────────────────────────────────────┘
-[T+5000ms] accumulatedTime += (millis() - segmentStartTime)
-           accumulatedTime = 0 + (15000 - 10000) = 5000ms
-[T+5000ms] currentTotalTime = accumulatedTime = 5000ms
-[T+5000ms] currentState = PAUSED
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Protocol & Feedback                                           │
-└─────────────────────────────────────────────────────────────────┘
-[T+5001ms] Serial.println("PAUSE_CYCLE")
-[T+5001ms] Serial.println("[USER] PAUSED")
-
-RPI receives:
-├─ Detects "PAUSE_CYCLE" → sets paused=True
-├─ Prints: "⏸️  PAUSED (500 samples so far)"
-└─ Log: [2026-01-19 18:30:05] INFO: Recording paused at 500 samples
-
-[T+5005ms] Red LED: Start blinking (800ms interval)
-[T+5010ms] Display update: "PAUSED 1\n5s" (frozen at 5 seconds)
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. Paused Loop (No sampling, timer frozen)                      │
-└─────────────────────────────────────────────────────────────────┘
-[T+5000ms - T+15000ms] User waits 10 seconds
-├─ No sensor sampling occurs
-├─ currentTotalTime stays at 5000ms
-├─ accumulatedTime stays at 5000ms
-├─ Display shows frozen "5s"
-└─ Red LED blinks every 800ms
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. Resume (User presses button again)                           │
-└─────────────────────────────────────────────────────────────────┘
-[T+15000ms] User presses button
-[T+15000ms] currentState == PAUSED ✓
-[T+15000ms] segmentStartTime = millis() = 25000ms (new segment!)
-[T+15000ms] currentState = RECORDING
-[T+15000ms] accumulatedTime = 5000ms (preserved!)
-
-[T+15001ms] Serial.println("RESUME_CYCLE")
-[T+15001ms] Serial.println("[USER] RESUMED")
-
-RPI receives:
-├─ Detects "RESUME_CYCLE" → sets paused=False
-├─ Prints: "▶️  RESUMED"
-├─ Log: [2026-01-19 18:30:15] INFO: Recording resumed at 500 samples
-└─ Resets last_data_time = time.time()  // Reset timeout detection
-
-[T+15010ms] Green LED: Fast blink (200ms)
-[T+15010ms] Display: "Recording 1\n5s" (continues from 5s)
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. Recording Continues (Timestamps remain continuous)           │
-└─────────────────────────────────────────────────────────────────┘
-[T+15010ms] Next sample:
-            currentTotalTime = accumulatedTime + (millis() - segmentStartTime)
-            currentTotalTime = 5000 + (25010 - 25000) = 5010ms
-
-            Serial.printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                          5010, ax, ay, az, gx, gy, gz)
-                          ^^^^
-                          Continues from 5000ms! No gap!
-
-RPI writes to CSV:
-5000,0.60,-0.18,-1.21,22.34,5.79,0.15   ← Last sample before pause
-5010,0.61,-0.17,-1.20,22.33,5.78,0.14   ← First sample after resume
-                                          (only 10ms gap, perfect!)
-```
-
----
-
-##### **Phase 5: Recording Complete**
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Duration Check (Every loop iteration)                        │
-└─────────────────────────────────────────────────────────────────┘
-[T+120000ms] currentTotalTime >= TARGET_DURATION (120000ms) ✓
-[T+120000ms] Call stopRecording()
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. State Transition: RECORDING → WAITING_NEXT                   │
-└─────────────────────────────────────────────────────────────────┘
-[T+120000ms] Serial.println("END_RECORDING")
-[T+120000ms] Serial.printf("RESETS,%lu\n", sensorResets)  // e.g., 0
-[T+120001ms] currentState = WAITING_NEXT
-
-RPI receives:
-├─ Detects "END_RECORDING" → sets recording=False
-├─ Writes log summary:
-│   [2026-01-19 18:32:00] INFO: Recording complete - 12000 samples
-│   [2026-01-19 18:32:00] SUMMARY: Duration: 120.0s
-│   [2026-01-19 18:32:00] SUMMARY: Sensor resets: 0
-│   [2026-01-19 18:32:00] SUMMARY: Errors: 0
-│   [2026-01-19 18:32:00] SUMMARY: Validation errors: 0
-├─ Closes CSV and log files
-└─ Prints cycle summary:
-    ✅ Cycle 1 Complete!
-       Total samples: 12000
-       Duration: 120.0s
-       Sensor resets: 0
-       Errors: 0
-       Validation errors: 0
-
-[T+120010ms] Green LED: OFF
-[T+120010ms] Red LED: Fast blink (500ms)
-[T+120010ms] Display: "DONE\nPress for\nNext Cycle"
-
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Check Cycle Limit                                             │
-└─────────────────────────────────────────────────────────────────┘
-[T+120000ms] currentCycle (1) < MAX_CYCLES (2) ✓
-[T+120000ms] currentState = WAITING_NEXT (not FINISHED)
-
-If user presses button:
-├─ Increment currentCycle to 2
-├─ Transition to RECORDING
-└─ Repeat Phase 2-5 for Cycle 2
-
-If currentCycle == MAX_CYCLES after completion:
-├─ currentState = FINISHED
-├─ Serial.println("ALL_COMPLETE")
-├─ Display: "FINISHED\nAll cycles done"
-├─ Green LED: Solid ON
-└─ Terminal state (no more recording)
-```
-
----
-
-This complete sequence shows every detail from power-on through initialization, I²C communication, state transitions, and continuous timestamp management across pause/resume cycles.
-
----
-
-#### 2. **RPI Python Recorder** (`rpi_usb_recorder_v2.py` v3)
-
-**Responsibilities:**
-- Receive data from ESP32 via USB Serial
-- Parse protocol messages and sensor data
-- Validate data format (7 columns, numeric values)
-- Detect connection timeouts (5s no-data warning)
-- Create CSV files (one per cycle)
-- Generate detailed event logs
-- Track data quality metrics
-
-**Key Features (v3):**
-- ✅ **ESP32 Error Handling**: Parses and logs 8 error event types
-- ✅ **Connection Monitoring**: 5-second timeout detection
-- ✅ **Data Validation**: Format checking (7 columns, numeric types)
-- ✅ **Error Logging**: Timestamped event log per cycle
-- ✅ **Metadata Tracking**: Sensor resets, error counts, validation issues
-- ✅ **Quality Reporting**: Comprehensive cycle summaries
-
-**Configuration:**
-```python
-DEFAULT_PORT = '/dev/ttyUSB0'     # USB serial port
-BAUD_RATE = 115200                 # Must match ESP32
-OUTPUT_FOLDER = 'tremor_data'      # Output directory
-CONNECTION_TIMEOUT = 5.0           # Seconds before warning
-EXPECTED_COLUMNS = 7               # CSV format validation
-```
-
-**Core Functions:**
-
-**`record_data(port)`**
-- Main recording loop
-- Handles serial communication
-- Processes protocol messages
-- Validates and writes data
-- Manages file I/O
-
-**`log_event(log_file, event_type, message)`**
-- Writes timestamped events to log file
-- Format: `[YYYY-MM-DD HH:MM:SS] TYPE: message`
-
-**`validate_data_line(line)`**
-- Validates CSV format
-- Checks column count (7 expected)
-- Verifies timestamp is positive integer
-- Ensures all sensor values are numeric
-- Returns `(True, None)` or `(False, error_message)`
-
-**Error Handling:**
-```python
-# Connection timeout
-if elapsed_since_data > CONNECTION_TIMEOUT:
-    log_event(log_file, "WARNING", "Connection timeout")
-
-# Data validation
-is_valid, error_msg = validate_data_line(line)
-if not is_valid:
-    log_event(log_file, "VALIDATION_ERROR", error_msg)
-    csv_file.write(f"# INVALID: {line}\n")
-
-# ESP32 errors
-if "ERROR_SENSOR_STUCK" in line:
-    log_event(log_file, "ERROR", "Sensor stuck - 15 constant samples")
-```
-
----
-
-#### 3. **GUI Dashboard** (`main_gui.py`)
-
-**Responsibilities:**
-- Provide Hebrew language interface
-- Launch motor control module
-- Trigger ESP32 communication
-- Initiate data analysis
-
-**Status:** Framework implemented, requires module integration:
-- `motor_control.py` (stub)
-- `esp32_comm.py` (not yet created)
-- `data_processor.py` (not yet created)
-
----
-
-## 📂 Output Files
-
-### File Structure
-Each recording cycle generates two files:
-```
-tremor_data/
-├── tremor_cycle1_20260119_183000.csv    # Sensor data
-├── tremor_cycle1_20260119_183000.log    # Event log
-├── tremor_cycle2_20260119_183215.csv    # Next cycle data
-└── tremor_cycle2_20260119_183215.log    # Next cycle log
-```
-
-### CSV File Format
-```csv
-# Cycle: 1
-# Start Time: 2026-01-19 18:30:00
-# Sample Rate: 100 Hz
-# Format: Timestamp(ms),Ax(m/s²),Ay,Az,Gx(°/s),Gy,Gz
-Timestamp,Ax,Ay,Az,Gx,Gy,Gz
-0,0.580,-0.200,-1.230,22.360,5.810,0.170
-10,0.582,-0.198,-1.228,22.358,5.808,0.168
-20,0.584,-0.196,-1.226,22.356,5.806,0.166
-...
-```
-
-**CSV Features:**
-- Metadata header with cycle info
-- Continuous timestamps (gaps removed from pause/resume)
-- Calibrated sensor values
-- Invalid data flagged with `# INVALID:` prefix
-
-### Log File Format
-```
-[2026-01-19 18:30:00] INFO: Cycle 1 started
-[2026-01-19 18:30:15] INFO: Recording paused at 1500 samples
-[2026-01-19 18:30:20] INFO: Recording resumed at 1500 samples
-[2026-01-19 18:30:45] ERROR: Sensor stuck - 15 constant samples detected
-[2026-01-19 18:30:45] RESET: Sensor reset #1
-[2026-01-19 18:30:46] INFO: Sensor reset successful
-[2026-01-19 18:32:00] INFO: Recording complete - 12000 samples
-[2026-01-19 18:32:00] SUMMARY: Duration: 120.0s
-[2026-01-19 18:32:00] SUMMARY: Sensor resets: 1
-[2026-01-19 18:32:00] SUMMARY: Errors: 1
-[2026-01-19 18:32:00] SUMMARY: Validation errors: 0
-```
-
-**Log Event Types:**
-- `INFO`: Normal operations (start, pause, resume, complete)
-- `WARNING`: Connection timeouts, minor issues
-- `ERROR`: Sensor errors, read failures
-- `VALIDATION_ERROR`: Data format issues
-- `RESET`: Sensor reset events
-- `CRITICAL`: Unrecoverable errors
-- `SUMMARY`: Final statistics
-
----
-
-## 🚀 Usage
-
-### Setup
-
-1. **Flash ESP32:**
-   ```bash
-   # Using Arduino IDE:
-   # - Install libraries: Adafruit_MPU6050, Adafruit_SSD1306, Adafruit_GFX
-   # - Select board: ESP32 Dev Module
-   # - Upload esp32_usb_serial_safe.ino
-   ```
-
-2. **Connect Hardware:**
-   - Wire MPU6050 and SSD1306 to ESP32
-   - Connect button to GPIO 13
-   - Connect ESP32 to RPI4 via USB
-
-3. **Verify USB Connection:**
-   ```bash
-   # Check available ports
-   ls /dev/ttyUSB*
-   # Should show: /dev/ttyUSB0 (or similar)
-
-   # If permission denied:
-   sudo chmod 666 /dev/ttyUSB0
-   ```
-
-### Running a Recording Session
-
-1. **Start Python Recorder:**
-   ```bash
-   cd /path/to/Proceesing-data-based-RPI4
-   python3 rpi_usb_recorder_v2.py
-   ```
-
-   Or specify port:
-   ```bash
-   python3 rpi_usb_recorder_v2.py /dev/ttyUSB0
-   ```
-
-2. **Start Recording on ESP32:**
-   - Press button on ESP32
-   - Display shows: "Recording 1"
-   - Green LED blinks rapidly
-   - RPI console shows: "Recording to: tremor_data/tremor_cycle1_*.csv"
-
-3. **Pause/Resume (Optional):**
-   - Press button during recording
-   - Display shows: "PAUSED"
-   - Red LED blinks
-   - Press again to resume
-   - **Timestamps remain continuous!**
-
-4. **Complete Cycle:**
-   - Wait for 2 minutes (auto-complete)
-   - Or press button to end early
-   - Console shows cycle summary
-
-5. **Multiple Cycles:**
-   - Press button to start next cycle
-   - System configured for 2 cycles by default
-   - Each cycle creates separate CSV + log files
-
-### Console Output Example
-```
-╔════════════════════════════════════╗
-║ ESP32 USB Recorder v3              ║
-║ + Error handling & validation     ║
-╚════════════════════════════════════╝
-
-📁 Created folder: tremor_data/
-📍 Using port: /dev/ttyUSB0
-📡 Connecting to /dev/ttyUSB0...
-✅ Connected!
-🎬 Waiting for ESP32 to start recording...
-
-📝 Recording to: tremor_data/tremor_cycle1_20260119_183000.csv
-📄 Log file: tremor_data/tremor_cycle1_20260119_183000.log
-   Cycle: 1 | Rate: 100 Hz
-   (Pause/Resume will use SAME file)
-
-   📊   100 samples |    1.0s
-   📊   200 samples |    2.0s
-   ...
-   📊 12000 samples |  120.0s
-
-✅ Cycle 1 Complete!
-   Total samples: 12000
-   Duration: 120.0s
-   Sensor resets: 0
-   Errors: 0
-   Validation errors: 0
-   CSV: tremor_data/tremor_cycle1_20260119_183000.csv
-   Log: tremor_data/tremor_cycle1_20260119_183000.log
-============================================================
-```
-
----
-
-## 🔍 Data Analysis
-
-### Offline Tremor Analyzer (`offline_analyzer.py`)
-
-**Research-Based Signal Processing Tool**
-
-The offline analyzer implements clinically-validated methods for Parkinson's disease tremor detection, based on peer-reviewed research using MPU6050 sensors and ESP32 hardware.
-
-#### Scientific Foundation
-
-**Hardware Validation:**
-- MPU6050 + ESP32 validated in clinical tremor research
-- Research papers:
-  - [MDPI - Clinical Medicine: MPU6050 Tremor Classification](https://www.mdpi.com/2077-0383/14/6/2073)
-  - [MDPI - Sensors: ELENA Project with ESP32](https://www.mdpi.com/1424-8220/25/9/2763)
-
-**Signal Processing Approach:**
-- **Accelerometer Focus**: Gyroscope data excluded (motor artifact concerns in motor-holding tests)
-- **Dual Perspective**: Both dominant axis analysis AND resultant vector magnitude
-- **Automatic Axis Detection**: Identifies highest energy axis (X, Y, or Z) automatically
-- **Dual-Band Filtering**: Separates rest tremor (3-7 Hz) from essential tremor (6-12 Hz)
-- **Butterworth Order 4**: Research-validated filter design with zero-phase distortion
-- **Resultant Vector**: Magnitude `√(Ax² + Ay² + Az²)` after gravity removal
-- **Clinical Features**: Mean amplitude, RMS, maximum amplitude, spectral power per band
-
-#### Tremor Classification
-
-**Rest Tremor (3-7 Hz) - Parkinsonian Type:**
-- Occurs at rest (seated, motor-holding test)
-- Frequency range: 3-7 Hz (extended from typical 4-6 Hz per research)
-- Characteristic of Parkinson's disease
-- Reduces with voluntary movement
-
-**Essential Tremor (6-12 Hz) - Postural Type:**
-- Occurs during postural holding
-- Frequency range: 6-12 Hz
-- Higher frequency than rest tremor
-- Intensifies with sustained posture
-
-**Automated Classification:**
-```python
-power_ratio = rest_power / essential_power
-if power_ratio > 2.0:    # Rest tremor dominant
-    tremor_type = "Rest Tremor (Parkinsonian)"
-    confidence = "High"
-elif power_ratio < 0.5:  # Essential tremor dominant
-    tremor_type = "Essential Tremor (Postural)"
-    confidence = "High"
-else:                    # Mixed pattern
-    tremor_type = "Mixed Tremor"
-    confidence = "Moderate"
-```
-
-#### Visualization Dashboard (4 Rows × 3 Columns)
-
-**Row 1: Filter Characteristics & Clinical Metrics**
-- Bode magnitude response (Butterworth order 4)
-- Bode phase response
-- Clinical metrics table (tremor type, confidence, RMS, power, frequency)
-
-**Row 2: Dominant Axis Analysis (Auto-Detected)**
-- Highest energy axis - raw signal (e.g., Y-axis)
-- Filtered signal (3-12 Hz) with envelope
-- Raw vs Filtered overlay comparison
-
-**Row 3: Resultant Vector Analysis**
-- Raw resultant magnitude `√(Ax² + Ay² + Az²)`
-- Filtered resultant (3-12 Hz) with envelope
-- Raw vs Filtered overlay comparison
-
-**Row 4: Power Spectral Density (PSD) Analysis**
-- PSD of dominant axis with tremor bands highlighted
-- PSD of resultant vector (raw vs filtered)
-- Band power bar chart with units (Rest 3-7 Hz vs Essential 6-12 Hz in m²/s⁴)
-
-#### Clinical Output Metrics
-
-**Quantitative Measurements:**
-- **Mean Amplitude**: Average tremor intensity (m/s²)
-- **RMS Amplitude**: Root-mean-square tremor power
-- **Maximum Amplitude**: Peak tremor intensity
-- **Dominant Frequency**: Primary tremor frequency (Hz)
-- **Rest Band Power**: Total power in 3-7 Hz range
-- **Essential Band Power**: Total power in 6-12 Hz range
-- **Power Ratio**: Rest/Essential classification confidence
-- **Tremor Type**: Automated classification result
-
-#### Running the Analyzer
-
-**GUI Mode:**
-```bash
-cd /home/user/Proceesing-data-based-RPI4
-python3 offline_analyzer.py
-```
-
-**Steps:**
-1. Click "📂 Load CSV Data"
-2. Select tremor CSV file
-3. View 4×3 dashboard with:
-   - **Row 1:** Filter design + clinical metrics table
-   - **Row 2:** Dominant axis (auto-detected, e.g., Y-axis) raw/filtered/overlay
-   - **Row 3:** Resultant vector magnitude raw/filtered/overlay
-   - **Row 4:** PSD analysis (dominant axis, all axes, band power)
-4. Check top-right for tremor classification
-5. Check console for numerical results
-
-**Console Output Example:**
-```
-======================================================================
-TREMOR ANALYSIS RESULTS
-======================================================================
-
-Tremor Classification: Rest Tremor (Parkinsonian)
-Confidence: High (ratio: 2.12)
-
-Rest Tremor Band (3-7 Hz):
-  Mean: 0.1234 m/s²
-  RMS: 0.2456 m/s²
-  Max: 0.5432 m/s²
-  Power: 4.5678
-
-Essential Tremor Band (6-12 Hz):
-  Mean: 0.0567 m/s²
-  RMS: 0.1234 m/s²
-  Max: 0.2876 m/s²
-  Power: 2.1543
-
-Dominant Frequency: 5.75 Hz (Rest tremor range)
-
-======================================================================
-```
-
-#### Interpreting Results
-
-**High Confidence Rest Tremor (ratio > 2.0):**
-- Strong evidence of Parkinsonian tremor
-- Dominant frequency typically 4-6 Hz
-- Clinical significance: Warrants PD evaluation
-- Consistent frequency across recordings
-
-**High Confidence Essential Tremor (ratio < 0.5):**
-- Postural tremor dominant
-- Higher frequency (6-12 Hz)
-- Different clinical implications
-- May require different treatment
-
-**Mixed Tremor (0.5 < ratio < 2.0):**
-- Power in both frequency bands
-- May indicate combined pathology
-- Requires clinical correlation
-- Consider medication effects
-
-**Severity Assessment:**
-- **Mild**: RMS < 0.10 m/s²
-- **Moderate**: RMS 0.10-0.30 m/s²
-- **Severe**: RMS > 0.30 m/s²
-
-### Quick Data Verification
-
-**Check CSV:**
-```bash
-# View metadata header
-head -10 tremor_data/tremor_cycle1_*.csv
-
-# Count samples (should be ~12,000 for 2 minutes at 100Hz)
-grep -v "^#" tremor_data/tremor_cycle1_*.csv | wc -l
-```
-
-**Check Log:**
-```bash
-# View complete event log
-cat tremor_data/tremor_cycle1_*.log
-
-# Check for errors
-grep "ERROR" tremor_data/tremor_cycle1_*.log
-```
-
-**Check Data Quality:**
-```bash
-# View cycle summary
-tail -10 tremor_data/tremor_cycle1_*.log
-```
-
-### Python Analysis (Example)
-```python
-import pandas as pd
-
-# Load data (skip comment lines)
-df = pd.read_csv('tremor_data/tremor_cycle1_20260119_183000.csv',
-                 comment='#')
-
-# Basic statistics
-print(df.describe())
-
-# Check sample rate consistency
-df['dt'] = df['Timestamp'].diff()
-print(f"Mean interval: {df['dt'].mean():.2f} ms (expected: 10 ms)")
-
-# Plot acceleration
-import matplotlib.pyplot as plt
-plt.figure(figsize=(12, 6))
-plt.plot(df['Timestamp']/1000, df['Ax'], label='Ax')
-plt.plot(df['Timestamp']/1000, df['Ay'], label='Ay')
-plt.plot(df['Timestamp']/1000, df['Az'], label='Az')
-plt.xlabel('Time (s)')
-plt.ylabel('Acceleration (m/s²)')
-plt.legend()
-plt.grid(True)
-plt.show()
-```
-
----
-
-## 🛡️ Error Handling & Reliability
-
-### Sensor Freeze Detection
-**Problem:** Sensor may "freeze" and return identical values
-**Solution:**
-- ESP32 monitors last 15 samples
-- Detects constant values (threshold: 0.001 m/s²)
-- Auto-resets sensor when freeze detected
-- RPI logs event: `ERROR: Sensor stuck - 15 constant samples`
-
-### Connection Timeout
-**Problem:** USB connection may drop or ESP32 may stop transmitting
-**Solution:**
-- RPI monitors data reception
-- Alerts after 5 seconds of no data
-- Logs warning: `WARNING: Connection timeout - no data for 5.3s`
-- Resets timeout counter on resume
-
-### Data Validation
-**Problem:** Serial data may be corrupted or malformed
-**Solution:**
-- Validates 7-column format
-- Checks timestamp is positive integer
-- Verifies all values are numeric
-- Flags invalid data with `# INVALID:` prefix
-- Logs validation errors with original line
-
-### Sensor Reset Tracking
-**Problem:** Need visibility into sensor reliability
-**Solution:**
-- ESP32 sends `SENSOR_RESET,<N>` on each reset
-- RPI tracks cumulative reset count
-- Displays in cycle summary
-- Logs all reset events with timestamps
-
-### Graceful Shutdown
-**Problem:** Data loss on unexpected termination
-**Solution:**
-- Catches `KeyboardInterrupt` (Ctrl+C)
-- Flushes CSV data on every write
-- Closes files properly in `finally` block
-- Saves current state before exit
-
----
-
-## ⚙️ Configuration
-
-### ESP32 Settings
-Edit `esp32_usb_serial_safe.ino`:
-```cpp
-const long TARGET_DURATION = 120000; // Recording duration (ms)
-const int SAMPLE_RATE_HZ = 100;      // Sampling frequency
-const int MAX_CYCLES = 2;            // Number of cycles
-const int MAX_STUCK = 15;            // Freeze detection threshold
-
-// Calibration offsets (from sensor calibration)
-float gX_off = 22.36, gY_off = 5.81, gZ_off = 0.17;
-float aX_off = 0.58, aY_off = -0.20, aZ_off = -1.23;
-```
-
-### RPI Settings
-Edit `rpi_usb_recorder_v2.py`:
-```python
-DEFAULT_PORT = '/dev/ttyUSB0'     # Change if using different port
-BAUD_RATE = 115200                # Must match ESP32
-OUTPUT_FOLDER = 'tremor_data'     # Output directory
-CONNECTION_TIMEOUT = 5.0          # Timeout warning (seconds)
-EXPECTED_COLUMNS = 7              # CSV validation
-```
-
----
-
-## 🐛 Troubleshooting
-
-### No Serial Port Found
-```bash
-# Check USB connection
-lsusb
-# Should show ESP32 device
-
-# Check permissions
-ls -l /dev/ttyUSB0
-sudo chmod 666 /dev/ttyUSB0
-
-# Add user to dialout group (permanent fix)
-sudo usermod -a -G dialout $USER
-# Log out and back in
-```
-
-### Connection Timeout Errors
-**Symptoms:** Frequent "No data received for 5.0s" warnings
-**Causes:**
-- Poor USB cable
-- Power supply issues
-- ESP32 buffer overflow
-
-**Solutions:**
-- Use high-quality USB cable
-- Use powered USB hub
-- Check ESP32 power supply (5V/500mA minimum)
-
-### Sensor Resets
-**Symptoms:** Multiple `SENSOR_RESET` messages
-**Causes:**
-- Loose I²C connections
-- Electromagnetic interference
-- Sensor overheating
-
-**Solutions:**
-- Check MPU6050 wiring
-- Use shielded cables
-- Add bypass capacitors (0.1µF near sensor VCC)
-- Ensure adequate ventilation
-
-### Invalid Data Errors
-**Symptoms:** `VALIDATION_ERROR` in logs
-**Causes:**
-- Serial buffer corruption
-- Baud rate mismatch
-- Electromagnetic interference
-
-**Solutions:**
-- Verify BAUD_RATE matches on both sides (115200)
-- Use shorter/better USB cable
-- Check for ground loops
-
----
-
-## 📦 Dependencies
-
-### ESP32 (Arduino)
-- `Adafruit_MPU6050`
-- `Adafruit_Sensor`
-- `Adafruit_GFX`
-- `Adafruit_SSD1306`
-- `Wire.h` (I²C)
-
-### Raspberry Pi (Python 3)
 
 **Data Acquisition:**
-- `pyserial` - USB serial communication
-- Standard library: `datetime`, `os`, `sys`, `time`
+- Raspberry Pi 4
+- ESP32 Development Board
+- MPU6050 IMU (accelerometer only, +/-2G range)
+- SSD1306 OLED Display (128x64)
+- Push Button (GPIO 13)
+- LEDs: Green (GPIO 15), Red (GPIO 2)
+- USB Micro cable (ESP32 to RPI4)
 
-**Offline Analysis:**
-- `numpy` - Numerical computing
-- `scipy` - Signal processing (Butterworth filters, Welch's method)
-- `matplotlib` - Visualization and plotting
-- `pandas` - CSV data manipulation
-- `tkinter` - GUI file dialog (usually pre-installed)
+**Vibration Source (for validation):**
+- L298N Motor Driver (H-bridge)
+- 12V DC Gearbox Motor with eccentric mass (40g)
+- 12V Power Supply
 
-**Installation:**
-```bash
-# Data acquisition only
-pip3 install pyserial
+### Wiring
 
-# Full analysis capabilities
-pip3 install pyserial numpy scipy matplotlib pandas
+```
+ESP32 Side:
+  MPU6050:  SDA → GPIO 21, SCL → GPIO 22, VCC → 3.3V, GND → GND
+  SSD1306:  SDA → GPIO 18, SCL → GPIO 19, VCC → 3.3V, GND → GND
+  Button:   GPIO 13 (internal pull-up)
+  LEDs:     Green → GPIO 15, Red → GPIO 2
+
+RPI 4 Side (L298N Motor Driver):
+  ENA (PWM) → GPIO 18
+  IN1       → GPIO 23
+  IN2       → GPIO 24
+  12V       → External power supply
+  Motor     → OUT1/OUT2
+```
+
+### Power Budget Table
+
+The system has two independent power domains: **5V USB** (RPI4 + ESP32 subsystem) and **12V external** (motor subsystem). Below is a per-component breakdown with voltage, current, and calculations derived from datasheets and circuit values.
+
+#### Power Domain 1: 5V USB (Data Acquisition)
+
+| # | Component | Role | Input Voltage | Operating Voltage | Current (Typical) | Current (Max) | Calculation / Notes |
+|---|-----------|------|---------------|-------------------|-------------------|---------------|---------------------|
+| 1 | **Raspberry Pi 4 Model B** | Host processor: DSP, file I/O, GUI, motor PWM | 5.1V USB-C | 5.1V (onboard regulators to 3.3V/1.8V) | ~600 mA | 1.2 A | Datasheet typical idle. Excludes USB peripherals. Powered by USB-C 5.1V/3A PSU |
+| 2 | **ESP32 DevKit V1** | Sampling controller: I2C sensor read, UART transmit, state machine | 5V (USB from RPI4) | 3.3V (onboard AMS1117-3.3 LDO) | ~50 mA | ~80 mA | Active mode, Wi-Fi/BT disabled, dual-core 240 MHz. LDO dropout: V_in(5V) → V_out(3.3V), P_LDO = (5 - 3.3) × 0.05 = 85 mW. USB draw from RPI4: ~50 mA at 5V |
+| 3 | **MPU6050** | 3-axis accelerometer (±2g, 16-bit ADC, I2C) | 3.3V (from ESP32) | 3.3V | 3.9 mA | 3.9 mA | Datasheet: all sensors active (accel + gyro), DLPF at 21 Hz. I2C @ 400 kHz Fast Mode. Gyro not used by FW but not explicitly disabled |
+| 4 | **SSD1306 OLED 0.96"** | Status display: countdown timer, cycle number, state | 3.3V (from ESP32) | 3.3V | ~20 mA | ~20 mA | 128×64 pixels, I2C @ 400 kHz (Wire1, address 0x3C). Current depends on pixels lit; 20 mA is typical with mixed content |
+| 5 | **Green LED** (GPIO 15) | Status: blink in IDLE (1s), fast blink in RECORDING (200ms), solid in FINISHED | 3.3V (ESP32 GPIO) | ~2.0V (V_fwd) | **5.9 mA** | 5.9 mA | I = (V_GPIO - V_fwd) / R = (3.3V - 2.0V) / 220Ω = **1.3V / 220Ω = 5.9 mA** |
+| 6 | **Red LED** (GPIO 2) | Status: blink in PAUSED (800ms), blink in WAITING_NEXT (500ms), solid on error | 3.3V (ESP32 GPIO) | ~1.8V (V_fwd) | **6.8 mA** | 6.8 mA | I = (V_GPIO - V_fwd) / R = (3.3V - 1.8V) / 220Ω = **1.5V / 220Ω = 6.8 mA** |
+| 7 | **Push Button** (GPIO 13) | User input: start/pause/resume recording | 3.3V pull-up | — | 0 mA (open) / **0.70 mA** (pressed) | 0.70 mA | External 4.7kΩ pull-up to 3.3V. When pressed (GPIO LOW): I = 3.3V / 4.7kΩ = **0.70 mA**. FW also enables internal pull-up (~45kΩ), parallel: 4.7k ∥ 45k ≈ 4.25kΩ → 0.78 mA. Momentary press only |
+
+**ESP32 subsystem total (worst-case, all indicators ON simultaneously):**
+
+```
+I_ESP32_total = I_ESP32 + I_MPU6050 + I_OLED + I_LED_green + I_LED_red + I_button
+             = 50 + 3.9 + 20 + 5.9 + 6.8 + 0.7
+             = 87.3 mA (at 3.3V rail)
+
+USB current drawn from RPI4 (5V):
+  I_USB = (3.3V × 87.3 mA) / (5V × η_LDO)     where η_LDO ≈ 3.3/5 = 66%
+        ≈ 87.3 mA × (3.3/5) / (3.3/5) = 87.3 mA (LDO is linear, I_in ≈ I_out)
+  P_USB = 5V × 87.3 mA = 436.5 mW
+  P_LDO_waste = (5V - 3.3V) × 87.3 mA = 148.4 mW (dissipated as heat in AMS1117)
+```
+
+**RPI4 total power (including ESP32 USB peripheral):**
+
+```
+I_RPI4_PSU = I_RPI4 + I_ESP32_USB = 600 + 87.3 ≈ 687 mA (typical)
+P_RPI4_total = 5.1V × 687 mA ≈ 3.5 W
+```
+
+#### Power Domain 2: 12V External (Motor Simulation)
+
+| # | Component | Role | Input Voltage | Operating Voltage | Current (Typical) | Current (Max) | Calculation / Notes |
+|---|-----------|------|---------------|-------------------|-------------------|---------------|---------------------|
+| 8 | **12V DC Power Supply** | Powers motor driver and motor | 220V AC mains | 12V DC output | ~300 mA | 2+ A | Must supply motor stall current + L298N quiescent. Recommended: 12V/2A minimum |
+| 9 | **L298N Motor Driver** | H-bridge: controls motor direction and speed via PWM | 12V (from PSU) | 12V motor / 5V logic (onboard 78M05 regulator) | ~36 mA (quiescent) | 2 A (per channel) | Saturation voltage drop: V_CE(sat) ≈ 1.0V per transistor × 2 (high + low side) = **~2V total drop**. Motor sees: V_motor = (12V - 2V) × Duty% = 10V × Duty%. Logic inputs (IN1, IN2, ENA) from RPI4 GPIO 3.3V — L298N threshold: V_IH = 2.3V, so 3.3V is valid HIGH |
+| 10 | **DC Gearbox Motor (JGA25-370)** | Generates vibration via eccentric mass (40g) rotation | 12V (via L298N) | Effective: (12 - 2) × Duty% | ~40 mA (no-load) | 2 A (stall) | 625 RPM max at 12V. Typical running current with eccentric mass at mid-speed (~5 Hz, 50% duty): ~200-400 mA |
+| 11 | **RPI4 GPIO → L298N** | Control signals: PWM (GPIO 18), Direction (GPIO 23, 24) | 3.3V (RPI4 GPIO) | 3.3V | < 1 mA total | ~2 mA | L298N input impedance is high (~40kΩ). I per pin ≈ 3.3V / 40kΩ ≈ 0.08 mA. Three pins total: ~0.25 mA. Well within RPI4 GPIO max (16 mA/pin) |
+
+**Motor subsystem power at typical operating point (5 Hz tremor simulation, ~50% duty):**
+
+```
+V_motor_effective = (12V - 2V) × 50% = 5.0V average
+I_motor ≈ 300 mA (estimated with 40g eccentric load)
+P_motor = 12V × 300 mA = 3.6 W (from supply)
+P_L298N_loss = 2V × 300 mA = 0.6 W (heat in H-bridge)
+P_motor_mechanical = 5.0V × 300 mA = 1.5 W (delivered to motor)
+P_L298N_quiescent = 12V × 36 mA = 0.43 W
+```
+
+#### System Power Summary
+
+| Power Domain | Source | Voltage | Typical Current | Typical Power | Notes |
+|-------------|--------|---------|----------------|--------------|-------|
+| Data Acquisition | USB-C PSU → RPI4 | 5.1V | ~690 mA | ~3.5 W | RPI4 + ESP32 (USB) + all peripherals |
+| Motor Simulation | External DC PSU | 12V | ~340 mA | ~4.1 W | L298N + motor at ~50% duty |
+| **System Total** | **Two supplies** | — | — | **~7.6 W** | Excludes monitor/keyboard if attached to RPI4 |
+
+#### LED Resistor Calculation Detail
+
+```
+Green LED (GPIO 15, R = 220Ω):
+  V_GPIO = 3.3V (ESP32 output HIGH)
+  V_fwd  = 2.0V (typical green LED forward voltage)
+  I_LED  = (3.3 - 2.0) / 220 = 5.9 mA
+  P_R    = I² × R = (5.9 mA)² × 220Ω = 7.7 mW
+  P_LED  = I × V_fwd = 5.9 mA × 2.0V = 11.8 mW
+
+Red LED (GPIO 2, R = 220Ω):
+  V_GPIO = 3.3V (ESP32 output HIGH)
+  V_fwd  = 1.8V (typical red LED forward voltage)
+  I_LED  = (3.3 - 1.8) / 220 = 6.8 mA
+  P_R    = I² × R = (6.8 mA)² × 220Ω = 10.2 mW
+  P_LED  = I × V_fwd = 6.8 mA × 1.8V = 12.2 mW
+```
+
+Both LEDs operate well within the ESP32 GPIO maximum source current of 40 mA per pin, and well within typical LED ratings (20 mA max).
+
+#### Button Pull-Up Calculation Detail
+
+```
+External pull-up resistor: R = 4.7kΩ to 3.3V
+FW also enables internal pull-up: R_int ≈ 45kΩ (ESP32 typical)
+Parallel combination: R_eff = (4.7k × 45k) / (4.7k + 45k) = 4.26kΩ
+
+Button released (GPIO reads HIGH):
+  No current flows through pull-up (no path to GND)
+  GPIO reads 3.3V → digitalRead = HIGH → no action
+
+Button pressed (GPIO reads LOW):
+  Pull-up connects 3.3V through R to GND via button
+  I = 3.3V / 4.26kΩ = 0.78 mA
+  P = 3.3V × 0.78 mA = 2.6 mW (momentary, only while pressed)
+
+Debounce: FW uses 500 ms software debounce (lastDebounceTime check)
 ```
 
 ---
 
-## 📈 Performance Specifications
+## Pipeline Walkthrough
 
-| Metric | Specification |
-|--------|--------------|
-| Sampling Rate | 100 Hz (10ms intervals) |
-| Data Throughput | ~7 KB/s per channel |
-| Recording Duration | 120 seconds per cycle (configurable) |
-| Cycle Count | 2 cycles (configurable) |
-| Total Samples | ~12,000 per cycle |
-| CSV Size | ~500 KB per cycle |
-| Timestamp Precision | 1 millisecond |
-| Connection Timeout | 5 seconds detection |
-| Freeze Detection | 15 consecutive identical samples |
+### Stage 1: Sensor Acquisition (`esp32_usb_serial_safe.ino`)
+
+#### Sampling
+
+The ESP32 samples the MPU6050 accelerometer at **100 Hz** (every 10 ms):
+
+```
+Sample interval = 1000 ms / 100 Hz = 10 ms
+```
+
+This satisfies the Nyquist criterion for rest tremor analysis:
+
+```
+Nyquist frequency = 100 Hz / 2 = 50 Hz
+Tremor band       = 2-8 Hz
+50 Hz >> 8 Hz     → No aliasing in the tremor band
+```
+
+The MPU6050 internal DLPF (Digital Low-Pass Filter) is set to **21 Hz bandwidth**, which attenuates frequencies above ~21 Hz before the signal reaches the ESP32. This acts as a hardware anti-aliasing filter.
+
+#### Accelerometer Configuration
+
+| Parameter | Value | Detail |
+|-----------|-------|--------|
+| Range | +/-2G | 16384 LSB/g resolution |
+| DLPF Bandwidth | 21 Hz | Hardware anti-alias filter |
+| I2C Clock | 400 kHz | Fast Mode |
+| Output | m/s^2 | Adafruit library converts raw LSB to SI units |
+
+#### Calibration
+
+Static calibration offsets are subtracted from each axis at the sensor level (before transmission):
+
+```cpp
+float aX_off = 0.301009;   // m/s^2
+float aY_off = 0.016101;   // m/s^2
+float aZ_off = 1.046231;   // m/s^2 (includes ~1g gravity on Z)
+
+ax = a.acceleration.x - aX_off;
+ay = a.acceleration.y - aY_off;
+az = a.acceleration.z - aZ_off;
+```
+
+These offsets are in **m/s^2** — the Adafruit MPU6050 library converts raw LSB register values to SI units internally, so `a.acceleration.z` is already in m/s^2 before the firmware applies calibration.
+
+**What the Z offset means physically:** At rest on a flat surface (Z axis pointing up), the sensor reports ~10.86 m/s^2 on Z — this is the sum of true gravitational acceleration (~9.81 m/s^2) plus the sensor's intrinsic bias (~1.05 m/s^2). The calibration offset `aZ_off = 1.046231` removes only the sensor bias, bringing the stationary Z reading back to ~9.81 m/s^2 (gravity). It does **not** remove gravity — that is handled later by the offline analyzer's DC offset removal (per-axis mean subtraction, Step 2 in the signal processing pipeline). The X and Y offsets (~0.30 and ~0.02 m/s^2) similarly remove small biases on the horizontal axes, where the true stationary value should be 0 m/s^2.
+
+#### Sensor Safety
+
+The firmware monitors sensor health continuously:
+
+| Check | Interval | Threshold | Action |
+|-------|----------|-----------|--------|
+| Stuck detection | Every sample | 15 identical readings (delta < 0.001 m/s^2) | Auto-reset sensor |
+| Read failure | Every sample | 5 consecutive failures | Auto-reset sensor |
+| Connection loss | Every 500 ms | I2C ACK missing or 2s since last read | Auto-reset sensor |
+
+##### Stuck Detection — Rationale and Relationship to Sensor Noise Floor
+
+The stuck detection logic compares each new reading against the previous one on all three axes:
+
+```cpp
+bool stuck = (abs(ax - lastAx) < STUCK_THRESHOLD &&   // 0.001 m/s^2
+              abs(ay - lastAy) < STUCK_THRESHOLD &&
+              abs(az - lastAz) < STUCK_THRESHOLD);
+```
+
+If all three axes change by less than `STUCK_THRESHOLD = 0.001 m/s^2` for `MAX_STUCK = 15` consecutive samples, the firmware declares the sensor stuck and triggers a hardware reset (I2C bus close → 150 ms wait → reinitialize).
+
+**Why 0.001 m/s^2 works — the sensor's noise floor guarantees variation:**
+
+The MPU6050 at ±2g range has:
+- **ADC resolution:** 16384 LSB/g → 1 LSB ≈ 0.000598 m/s^2 (~2 LSB ≈ 0.001 m/s^2)
+- **Output noise (datasheet):** ~0.01g RMS ≈ **0.098 m/s^2 RMS** — this is the total RMS noise at the accelerometer output as specified by InvenSense
+
+The stuck threshold (0.001 m/s^2) is roughly **98× smaller** than the sensor's output noise floor (0.098 m/s^2). This is the key insight: a properly functioning MPU6050 will **always** produce sample-to-sample fluctuations well above 0.001 m/s^2, even when perfectly stationary on a table. The noise is an inherent property of the MEMS sensing element and the internal ADC — it physically cannot produce identical readings on consecutive samples.
+
+To put it concretely: the stuck threshold sits at ~2 LSB, while the sensor's natural noise spans ~160 LSB RMS. These two values occupy completely different orders of magnitude, which is why the stuck detector has zero false-positive risk on a healthy sensor.
+
+Therefore, if readings are truly identical (delta < 0.001 m/s^2 on all axes) for 15 consecutive samples at 100 Hz (150 ms), the ADC has almost certainly locked up — a known failure mode of MEMS accelerometers where the I2C data registers return stale (frozen) values. This can occur due to I2C bus glitches, power supply transients, or internal sensor state corruption. The 15-sample threshold provides an additional safety margin: even if a single sample happened to coincidentally match the previous one, 15 consecutive matches across all three axes simultaneously is physically implausible for a functioning sensor.
+
+**Relationship to the ±2g range:** The ±2g range (±19.6 m/s^2) provides the highest ADC resolution (16384 LSB/g), which maximizes sensitivity for small tremor amplitudes (typical Parkinsonian tremor: 0.1–2.0 m/s^2). The tradeoff is that the ±2g range also has the lowest output noise in absolute terms (~0.098 m/s^2), but this is still nearly 100× above the stuck threshold — so the detection remains reliable. At wider ranges (±4g, ±8g, ±16g) the noise floor increases further, making stuck detection even easier, but at the cost of reduced tremor sensitivity.
+
+Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz, reinitialize MPU6050.
+
+#### State Machine
+
+```
+IDLE ──[button]──→ RECORDING ──[button]──→ PAUSED ──[button]──→ RECORDING
+                       │                                            │
+                       └──────[120s elapsed]──→ WAITING_NEXT ──[button]──→ RECORDING
+                                                     │
+                                              [all cycles done]
+                                                     │
+                                                     ▼
+                                                  FINISHED
+```
+
+- **Recording duration**: 120 seconds per cycle (configurable via `TARGET_DURATION`)
+- **Max cycles**: 2 (configurable via `MAX_CYCLES`)
+- **Stopwatch timing**: accumulated time is preserved across pause/resume so timestamps in the CSV remain continuous with no gaps
+
+### Stage 2: UART Transmission (ESP32 → RPI)
+
+#### Physical Layer
+
+```
+ESP32 USB Micro → USB cable → RPI 4 USB port → /dev/ttyUSB0
+```
+
+The ESP32 native USB-to-UART bridge (CP2102 or CH340) converts Serial.print() output to USB packets. On the RPI side, the Linux kernel presents this as a virtual serial port `/dev/ttyUSB0`.
+
+#### Protocol
+
+| Parameter | Value |
+|-----------|-------|
+| Baud rate | 115200 bps |
+| Data bits | 8 |
+| Stop bits | 1 |
+| Parity | None |
+| Flow control | None |
+
+#### Data Format
+
+Each sample is one CSV line transmitted over UART:
+
+```
+<timestamp_ms>,<Ax>,<Ay>,<Az>\n
+```
+
+Example: `10,0.582,-0.198,-1.228\n`
+
+#### Transmission Rate Calculation
+
+Each data line contains approximately 25-30 characters:
+
+```
+Timestamp (1-6 chars) + comma + Ax (6 chars) + comma + Ay (6 chars) + comma + Az (6 chars) + newline
+Typical: "10500,-0.198,-1.228,9.432\n" = ~28 characters = 28 bytes
+```
+
+At 100 Hz:
+
+```
+Data throughput  = 28 bytes × 10 bits/byte × 100 Hz = 28,000 bps
+Available        = 115,200 bps
+Utilization      = 28,000 / 115,200 = ~24%
+```
+
+The 10 bits/byte accounts for 8 data bits + 1 start bit + 1 stop bit (UART framing). At 24% utilization, there is substantial margin for the control messages (START_RECORDING, PAUSE_CYCLE, etc.) that are interleaved with data.
+
+#### Control Protocol Messages
+
+The ESP32 sends text-based control messages alongside data. The recorder parses these to manage state:
+
+| Message | Meaning |
+|---------|---------|
+| `START_RECORDING` | Recording cycle started |
+| `CYCLE,<N>` | Cycle number N began |
+| `PAUSE_CYCLE` | User paused recording |
+| `RESUME_CYCLE` | User resumed recording |
+| `END_RECORDING` | Cycle complete (120s elapsed) |
+| `ALL_COMPLETE` | All cycles finished |
+| `ERROR_SENSOR_STUCK` | 15 identical readings detected |
+| `ERROR_SENSOR_LOST` | I2C connection lost |
+| `ERROR_READ_FAILED` | 5 consecutive read failures |
+| `SENSOR_RESET,<N>` | Sensor reset #N occurred |
+| `SENSOR_RESET_OK` | Reset successful |
+| `SENSOR_RESET_FAILED` | Reset failed |
+
+The recorder distinguishes data lines from control messages by checking if the line starts with a digit and contains a comma.
+
+### Stage 3: Data Recording (`rpi_usb_recorder_v2.py`)
+
+The recorder runs on the RPI 4 and listens on the USB serial port.
+
+#### Recording Pipeline
+
+```
+Serial port (/dev/ttyUSB0, 115200 baud)
+  │
+  ▼
+ser.readline()          ← blocks until \n received
+  │
+  ▼
+Parse line type:
+  ├── Control message → update state machine (recording/paused/done)
+  ├── CSV header ("Timestamp,...") → write to file
+  └── Data line ("12345,0.1,0.2,0.3") → validate → write to CSV
+```
+
+#### Data Validation
+
+Every data line is validated before writing (line 38-58):
+
+```python
+def validate_data_line(line):
+    parts = line.split(',')
+    if len(parts) != 4:           # Must have exactly 4 columns
+        return False
+    int(parts[0])                  # Timestamp must be integer >= 0
+    for i in range(1, 4):
+        float(parts[i])           # Ax, Ay, Az must be numeric
+```
+
+Invalid lines are written as comments (`# INVALID: ...`) so they are preserved but excluded from analysis.
+
+#### Output Files
+
+For each recording cycle, two files are created:
+
+```
+tremor_data/
+  tremor_cycle1_20260304_143000.csv    ← Sensor data
+  tremor_cycle1_20260304_143000.log    ← Events and errors
+```
+
+CSV file structure:
+
+```csv
+# Cycle: 1
+# Start Time: 2026-03-04 14:30:00
+# Sample Rate: 100 Hz
+# Format: Timestamp(ms),Ax(m/s^2),Ay(m/s^2),Az(m/s^2)
+Timestamp,Ax,Ay,Az
+0,0.582,-0.198,-1.228
+10,0.580,-0.200,-1.230
+20,0.583,-0.197,-1.227
+...
+```
+
+#### Connection Monitoring
+
+If no data is received for 5 seconds during active recording, the recorder logs a timeout warning. This detects USB disconnections or ESP32 hangs without crashing the recorder.
+
+#### Expected Data Volume
+
+```
+Samples per cycle  = 100 Hz × 120 s = 12,000 samples
+Bytes per line     = ~28 bytes
+File size per cycle = 12,000 × 28 = ~336 KB
+With metadata      = ~340 KB per CSV file
+```
+
+### Stage 4: Motor Control (`motor_control.py`)
+
+The DC motor with an eccentric mass generates controlled vibrations at a known frequency. This serves as the system's input signal for input-output validation.
+
+#### PWM Configuration
+
+```
+PWM pin:           GPIO 18 (via L298N ENA)
+Carrier frequency: 1000 Hz (electrical switching frequency)
+Direction pins:    IN1 = GPIO 23, IN2 = GPIO 24
+```
+
+The 1 kHz PWM carrier is the switching frequency of the L298N H-bridge — it is NOT the motor rotation frequency. The motor rotation frequency depends on the duty cycle:
+
+#### Duty Cycle to Rotation Frequency (Open Loop)
+
+```
+Motor max: 625 RPM at 12V (100% duty cycle)
+Max Hz:    625 / 60 = 10.42 Hz
+
+Mapping (linear approximation):
+  Duty%   Voltage   RPM     Hz
+  20%     2.4V      125     2.1
+  30%     3.6V      188     3.1
+  40%     4.8V      250     4.2
+  50%     6.0V      313     5.2
+  60%     7.2V      375     6.3
+  70%     8.4V      438     7.3
+  80%     9.6V      500     8.3
+```
+
+Note: This is an open-loop approximation. Actual motor speed varies with load, friction, and supply voltage. The duty-to-Hz mapping assumes a linear relationship which is approximate.
+
+#### Control Interface
+
+The `MotorController` class provides:
+
+```python
+motor = MotorController()     # Initialize GPIO + PWM
+motor.start_forward()          # Set direction (IN1=HIGH, IN2=LOW)
+motor.set_duty_cycle(40)       # Set speed (0-100%)
+motor.stop()                   # Set duty to 0%
+motor.cleanup()                # Stop + release GPIO
+```
+
+When running standalone (`python3 motor_control.py`), an interactive CLI allows changing speed in real-time using duty cycle values or target Hz.
+
+### Stage 5: System Orchestration (`sys_manager.py`)
+
+The system manager coordinates motor control and data recording using Python threading.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                  sys_manager.py                  │
+│                                                  │
+│  Main Thread              Recorder Thread        │
+│  ────────────             ───────────────        │
+│  1. Init motor            record_data(port)      │
+│  2. Set duty cycle          │                    │
+│  3. Start recorder ─────→ while True:            │
+│     thread                    ser.readline()     │
+│  4. Accept motor              validate + write   │
+│     commands while            ...                │
+│     recording               ALL_COMPLETE         │
+│  5. done_event.wait() ◄─── done_event.set()     │
+│  6. motor.cleanup()                              │
+│  7. Launch analyzer                              │
+└─────────────────────────────────────────────────┘
+```
+
+#### Threading Model
+
+- **Main thread**: sets motor speed, then enters a loop where it accepts motor commands (change Hz, stop, status) while monitoring the `done_event`
+- **Recorder thread** (daemon): runs `record_data(port)` which blocks in the UART read loop. When ESP32 sends `ALL_COMPLETE`, the function returns and signals `done_event`
+- **Motor PWM**: runs in hardware on GPIO18 — no thread needed. Once `set_duty_cycle()` is called, the PWM signal continues autonomously
+
+#### Synchronization
+
+A `threading.Event` object coordinates the two threads:
+
+```python
+done_event = threading.Event()
+
+# Recorder thread (on finish):
+done_event.set()
+
+# Main thread (monitoring):
+done_event.wait(timeout=0.1)   # Non-blocking check
+```
+
+When the recorder signals completion, the main thread exits its command loop, stops the motor, and optionally launches the offline analyzer.
+
+#### Execution Flow
+
+```
+$ python3 sys_manager.py
+
+[Step 1] Motor Setup
+  → User enters: "hz 5" (sets motor to ~5 Hz vibration)
+  → MotorController sets duty cycle, motor starts spinning
+
+[Step 2] Serial Port
+  → Auto-detects /dev/ttyUSB0
+
+[Step 3] Start Recorder Thread
+  → recorder_thread.start()
+  → UART read loop begins in background
+
+[Step 4] Recording in Progress
+  → Main thread accepts commands: hz, stop, status
+  → Motor spins while recorder captures data
+  → ESP32 records for 120s per cycle
+
+[Step 5] Recording Complete
+  → ESP32 sends ALL_COMPLETE → done_event fires
+  → motor.cleanup() stops PWM and releases GPIO
+
+[Step 6] Launch Offline Analyzer
+  → subprocess.Popen(["python3", "offline_analyzer.py"])
+```
+
+### Stage 6: Offline Signal Processing (`offline_analyzer.py`)
+
+The offline analyzer is a Tkinter GUI application that loads a recorded CSV file and performs the full signal processing chain.
+
+#### Signal Processing Chain
+
+```
+CSV File (Timestamp, Ax, Ay, Az)
+  │
+  │ Step 1: Parse CSV
+  ▼
+Raw axes: Ax[n], Ay[n], Az[n]  (N samples, 100 Hz)
+  │
+  │ Step 2: DC Offset Removal (gravity removal)
+  │   Ax_clean[n] = Ax[n] - mean(Ax)
+  │   Ay_clean[n] = Ay[n] - mean(Ay)
+  │   Az_clean[n] = Az[n] - mean(Az)
+  ▼
+Zero-mean axes
+  │
+  │ Step 3: Resultant Vector Magnitude
+  │   accel_mag[n] = sqrt(Ax_clean[n]^2 + Ay_clean[n]^2 + Az_clean[n]^2)
+  ▼
+Resultant vector: 1 signal, N samples
+  │
+  ├──────────────────────────────────────┐
+  │                                      │
+  ▼ RAW PATH                             ▼ FILTERED PATH
+  │                                      │
+  │ Step 4a: Welch PSD                   │ Step 4b: Butterworth Bandpass
+  │   psd_raw(f)                         │   2-8 Hz, Order 4, filtfilt
+  │                                      │   (zero-phase, effective Order 8)
+  │                                      ▼
+  │                               Filtered resultant
+  │                                      │
+  │                                      │ Step 5: Welch PSD
+  │                                      │   psd_filt(f)
+  │                                      │
+  │                                      │ Step 6: Peak Detection (2-8 Hz)
+  │                                      │   argmax(psd_filt) in band
+  │                                      │
+  │                                      │ Step 7: Metrics Extraction
+  │                                      │   RMS, Band Power, Peak PSD
+  │                                      │
+  │                                      │ Step 8: Input-Output Validation
+  │                                      │   |peak_freq - PWM_freq| <= 0.5 Hz
+  │                                      │   AND SNR >= 6 dB
+  ▼                                      ▼
+                Step 9: Visualization (4 Figures, 10 subplots)
+```
+
+#### Step 2: DC Offset Removal
+
+The accelerometer measures gravity as a constant ~9.8 m/s^2 on the axis pointing down. Subtracting the mean per axis removes this DC component:
+
+```python
+ax_clean = ax - np.mean(ax)     # Removes gravity + sensor bias
+ay_clean = ay - np.mean(ay)
+az_clean = az - np.mean(az)
+```
+
+After this step, each axis oscillates around zero. Only dynamic acceleration (vibration/tremor) remains.
+
+#### Step 3: Resultant Vector Magnitude
+
+Combines three axes into a single scalar signal representing total vibration intensity at each time sample:
+
+```python
+accel_mag[n] = sqrt(ax_clean[n]^2 + ay_clean[n]^2 + az_clean[n]^2)
+```
+
+This makes the analysis orientation-independent — tremor is detected regardless of how the sensor is mounted.
+
+Note: the magnitude is always >= 0 (it is a Euclidean norm). The raw resultant is NOT symmetric around zero. Symmetry is restored after bandpass filtering (Step 4b) which removes the DC component introduced by the norm operation.
+
+#### Step 4b: Butterworth Bandpass Filter
+
+```
+Filter type:     Butterworth (maximally flat passband)
+Order:           4 (per pass)
+Passband:        2-8 Hz
+Application:     scipy.signal.filtfilt (forward-backward)
+Effective order: 8 (filtfilt doubles the order)
+Phase shift:     Zero (filtfilt cancels phase distortion)
+```
+
+Why 2-8 Hz instead of the clinical 3-7 Hz? The Butterworth filter has gradual roll-off. At the -3 dB cutoff frequencies, the signal is attenuated by ~30%. By setting the filter edges at 2 and 8 Hz, the clinical band of 3-7 Hz falls well within the passband where attenuation is negligible.
+
+#### Step 5: Welch PSD (Power Spectral Density)
+
+Welch's method estimates the power spectrum by averaging periodograms of overlapping windowed segments:
+
+```
+Window length:       4 seconds = 400 samples (at 100 Hz)
+Overlap:             50% = 200 samples
+Window function:     Hann (scipy default)
+Frequency resolution: 1 / 4s = 0.25 Hz
+```
+
+Frequency resolution calculation:
+
+```
+df = fs / N_window = 100 Hz / 400 samples = 0.25 Hz
+```
+
+This means the PSD has a data point every 0.25 Hz: 0, 0.25, 0.50, ..., 49.75, 50.0 Hz.
+
+Number of segments for a 120-second recording:
+
+```
+Total samples:  12,000
+Segment length: 400
+Hop size:       200 (50% overlap)
+Segments:       (12,000 - 400) / 200 + 1 = 59 segments
+```
+
+Averaging 59 segments reduces the variance of the PSD estimate.
+
+**Output units:**
+- PSD: (m/s^2)^2/Hz — power spectral density
+- Plots display PSD in dB: Power_dB = 10 * log10(PSD_linear)
+
+#### Step 6: Peak Detection
+
+The dominant frequency is found by locating the maximum of the filtered PSD within the 2-8 Hz analysis band:
+
+```python
+rest_mask = (freq >= 2.0) & (freq <= 8.0)
+peak_idx = np.argmax(psd_filt[rest_mask])
+dominant_freq = freq[rest_mask][peak_idx]
+peak_psd = psd_filt[rest_mask][peak_idx]
+```
+
+Since log10 is monotonically increasing, the peak in linear PSD and the peak in dB PSD occur at the same frequency.
+
+#### Step 7: Metrics
+
+| Metric | Formula | Units | Meaning |
+|--------|---------|-------|---------|
+| RMS Amplitude | sqrt(mean(x_filt^2)) | m/s^2 | Overall vibration intensity in tremor band |
+| Mean Amplitude | mean(\|x_filt\|) | m/s^2 | Average absolute vibration |
+| Max Amplitude | max(\|x_filt\|) | m/s^2 | Peak instantaneous vibration |
+| Dominant Freq | argmax(PSD) in 2-8 Hz | Hz | Strongest frequency component |
+| Peak PSD | max(PSD) in 2-8 Hz | (m/s^2)^2/Hz | Power density at dominant frequency |
+| Band Power | integral(PSD, 2-8 Hz) | (m/s^2)^2 | Total power in tremor band |
+| Peak SNR | 10*log10(peak/noise_floor) | dB | Peak prominence above in-band noise |
+| Noise Floor | mean(PSD excl. peak +/-1 bin) | (m/s^2)^2/Hz | Average noise level in tremor band |
+
+**RMS vs Resultant Vector:**
+- Resultant vector: spatial combination (3 axes → 1 value per sample)
+- RMS: temporal summary (N samples → 1 scalar value)
+
+```
+Ax, Ay, Az  →  sqrt(Ax^2 + Ay^2 + Az^2)  →  N values  →  sqrt(mean(x^2))  →  1 value
+              (per sample)                                 (across all samples)
+```
+
+**Band Power** is computed by integrating the PSD over 2-8 Hz using the trapezoidal rule:
+
+```python
+band_power = np.trapz(psd_filt[rest_mask], freq[rest_mask])
+```
+
+This gives the total signal power within the tremor band in (m/s^2)^2.
+
+#### Step 8: Input-Output Validation
+
+The user enters the motor's PWM frequency (the expected vibration frequency). The system validates two conditions:
+
+**Condition 1 — Frequency Match:**
+
+```
+|dominant_freq - PWM_freq| <= 0.5 Hz
+```
+
+The tolerance of 0.5 Hz equals 2x the frequency resolution (2 x 0.25 Hz). This is a double-sided tolerance band centered on the PWM frequency.
+
+**Condition 2 — In-Band SNR (Peak Quality):**
+
+```
+SNR = 10 * log10(peak_PSD / noise_floor) >= 6 dB
+```
+
+The in-band SNR measures whether the detected peak is a real signal or just the tallest point in a flat noise spectrum. The noise floor is computed as the mean PSD across all bins in the 2-8 Hz band, excluding the peak bin and its immediate neighbors (+/-1 bin, to account for spectral leakage). A threshold of 6 dB means the peak must be at least 4x stronger than the average noise level in the band.
+
+**Combined Validation:**
+
+```
+PASS:  frequency match AND SNR >= 6 dB
+FAIL:  either condition not met
+```
+
+When validation fails, the system reports the specific reason:
+- `freq mismatch` — peak is at the wrong frequency
+- `weak peak` — peak is at the right frequency but not prominent enough
+- `freq + weak peak` — both conditions failed
+
+#### Step 9: Visualization
+
+The analyzer produces 4 figures with 10 subplots across separate tabs:
+
+**Figure 1 — Filter Characteristics (2 subplots):**
+- Fig 1.1: Bode Magnitude — shows filter gain vs frequency for both single-pass and filtfilt
+- Fig 1.2: Bode Phase — shows filtfilt achieves zero phase across all frequencies
+
+**Figure 2 — Time Domain Analysis (3 subplots):**
+- Fig 2.1: Raw resultant vector magnitude with RMS value
+- Fig 2.2: Filtered resultant (2-8 Hz) with Hilbert envelope and RMS value
+- Fig 2.3: Overlay of raw vs filtered for visual comparison
+
+**Figure 3 — Frequency Domain Analysis (3 subplots):**
+- Fig 3.1: PSD full range (0-20 Hz) — raw and filtered, with peak marker
+- Fig 3.2: PSD zoomed (1-12 Hz) — filtered PSD with PWM frequency line and +/-0.5 Hz tolerance band
+- Fig 3.3: Metrics and validation summary table (text) — includes SNR, noise floor, and fail reason
+
+**Figure 4 — Zoomed Time Domain (2 subplots):**
+- Fig 4.1: Filtered signal zoomed to a 3-second window from mid-recording, with Hilbert envelope, numbered rising zero-crossing markers, and cycle count — displays "Cycles: N | N/3s = X.XX Hz (PSD: Y.YY Hz)" for direct visual verification of the detected frequency
+- Fig 4.2: Raw vs filtered overlay on the same 3-second window — shows how the bandpass filter extracts the motor vibration from the raw signal
+
+### Stage 7: Experimental Offline Analyzer (`offline_analyzer_exp.py`)
+
+The experimental analyzer is a variant of the offline analyzer with **no pass/fail criteria**. It reports all metrics as informational values, adds two consecutive 5-second zoomed windows, and includes a full-recording FFT analysis.
+
+#### Differences from `offline_analyzer.py`
+
+| Feature | `offline_analyzer.py` | `offline_analyzer_exp.py` |
+|---------|----------------------|--------------------------|
+| Frequency deviation | Pass/Fail (threshold 0.5 Hz) | Informational only (reported, no judgment) |
+| Peak SNR | Pass/Fail (threshold 6 dB) | Informational only (calculated, no threshold) |
+| Energy metric | N/A | Dominant Power Ratio (DPR) |
+| Fig 2 | 3 subplots (raw, filtered, overlay) | 2 broader subplots (raw, filtered) |
+| Fig 3.3 | Standard metrics panel | Enlarged metrics panel with DPR |
+| Fig 4 | 3-second zoomed window (mid-recording) | 5-second zoomed window A (mid-recording) |
+| Fig 5 | N/A | 5-second zoomed window B (consecutive after A) |
+| Fig 6 | N/A | Full-width FFT magnitude (1-12 Hz) over full 120s |
+
+#### Signal Processing Pipeline
+
+The experimental analyzer follows the same core signal processing chain as the standard analyzer. Below is every step with the mathematical formulation and rationale.
+
+##### Step 1: CSV Parsing
+
+Raw data is loaded from the CSV file produced by the recorder:
+
+```
+Input:  Timestamp(ms), Ax(m/s^2), Ay(m/s^2), Az(m/s^2)
+Output: t[n], Ax[n], Ay[n], Az[n]   (N samples at 100 Hz)
+```
+
+Timestamps are converted from milliseconds to seconds: `t[n] = Timestamp[n] / 1000`.
+
+##### Step 2: DC Offset Removal (Gravity Removal)
+
+**What:** Subtract the mean of each axis from all samples on that axis.
+
+**Math:**
+
+```
+Ax_clean[n] = Ax[n] - (1/N) * SUM(Ax[k], k=0..N-1)
+Ay_clean[n] = Ay[n] - (1/N) * SUM(Ay[k], k=0..N-1)
+Az_clean[n] = Az[n] - (1/N) * SUM(Az[k], k=0..N-1)
+```
+
+**Why:** The accelerometer constantly measures gravitational acceleration (~9.8 m/s^2 on the downward axis) plus any sensor bias. Subtracting the per-axis mean removes this static component, leaving only the dynamic acceleration (vibration/tremor). This is equivalent to removing the DC component (0 Hz) from the signal in the frequency domain. Without this step, the large DC offset would dominate all subsequent analysis and mask the tremor signal.
+
+##### Step 3: Resultant Vector Magnitude
+
+**What:** Combine three orthogonal axes into a single scalar representing total vibration intensity.
+
+**Math:**
+
+```
+accel_mag[n] = sqrt( Ax_clean[n]^2 + Ay_clean[n]^2 + Az_clean[n]^2 )
+```
+
+This is the Euclidean norm (L2 norm) of the 3D acceleration vector at each time sample.
+
+**Why:** Tremor vibration may occur along any axis or combination of axes depending on sensor orientation. The resultant vector magnitude captures total vibration energy regardless of mounting angle. This makes the analysis orientation-independent — critical for real-world clinical use where sensor placement varies between subjects.
+
+**Note:** The magnitude is always >= 0 (it is a norm). This introduces a DC component that will be removed by the subsequent bandpass filter.
+
+##### Step 4: Butterworth Bandpass Filter (2-8 Hz)
+
+**What:** Apply a 4th-order Butterworth bandpass filter using zero-phase forward-backward filtering (filtfilt).
+
+**Math (filter design):**
+
+```
+Filter type:      Butterworth (maximally flat magnitude in passband)
+Order:            4 (per single pass)
+Passband:         [2 Hz, 8 Hz]
+Normalized cutoffs: [2/50, 8/50] = [0.04, 0.16]   (Nyquist = Fs/2 = 50 Hz)
+```
+
+The Butterworth transfer function for order N with cutoff wc:
+
+```
+|H(jw)|^2 = 1 / (1 + (w/wc)^(2N))
+```
+
+This provides maximally flat response in the passband (no ripple) and monotonic roll-off in the stopband.
+
+**filtfilt (zero-phase filtering):**
+
+```
+y[n] = filtfilt(b, a, x[n])
+     = reverse( filter(b, a, reverse( filter(b, a, x[n]) ) ) )
+```
+
+The signal is filtered forward, then the result is reversed and filtered again. This:
+- **Doubles the effective order** (4 -> 8), giving steeper roll-off
+- **Cancels all phase distortion**, preserving exact timing of waveform features
+- **Squares the magnitude response**: |H_eff(f)|^2 = |H(f)|^4
+
+**Why 2-8 Hz instead of clinical 3-7 Hz?** The Butterworth filter has gradual roll-off at the cutoff frequencies. At the -3 dB points (2 and 8 Hz), the signal is attenuated by ~29%. With filtfilt the attenuation at cutoff doubles to -6 dB (~50%). By placing the filter edges at 2 and 8 Hz, the clinical tremor band of 3-7 Hz falls well within the passband where attenuation is negligible (< 0.1 dB).
+
+##### Step 5: Welch PSD (Power Spectral Density)
+
+**What:** Estimate the power spectrum using Welch's method (averaged periodograms of overlapping segments).
+
+**Math:**
+
+```
+1. Divide signal x[n] (length N) into K overlapping segments of length L
+2. Apply Hann window w[n] to each segment: x_k[n] = x_k[n] * w[n]
+3. Compute DFT of each windowed segment: X_k[f] = FFT(x_k[n])
+4. Compute periodogram: P_k[f] = |X_k[f]|^2 / (Fs * SUM(w[n]^2))
+5. Average across segments: PSD[f] = (1/K) * SUM(P_k[f], k=1..K)
+```
+
+**Parameters:**
+
+```
+Segment length (L):     400 samples (4 seconds at 100 Hz)
+Overlap:                50% = 200 samples
+Window:                 Hann (scipy default)
+Frequency resolution:   df = Fs / L = 100 / 400 = 0.25 Hz
+Number of segments (K): (12000 - 400) / 200 + 1 = 59 (for 120s recording)
+```
+
+**Why Welch?** A single FFT periodogram of the full 120s signal has high variance (noisy estimate). Welch's method trades frequency resolution for reduced variance by averaging 59 periodograms. The 50% overlap with Hann windowing is the standard choice that provides ~62% variance reduction compared to a single periodogram.
+
+**Output units:** (m/s^2)^2/Hz (power spectral density). Displayed in dB: `PSD_dB = 10 * log10(PSD)`.
+
+##### Step 6: Peak Detection in 2-8 Hz Band
+
+**What:** Find the dominant tremor frequency by locating the PSD maximum within the analysis band.
+
+**Math:**
+
+```
+rest_mask = (freq >= 2.0 Hz) AND (freq <= 8.0 Hz)
+peak_idx  = argmax( PSD_filtered[rest_mask] )
+f_dominant = freq[rest_mask][peak_idx]
+PSD_peak   = PSD_filtered[rest_mask][peak_idx]
+```
+
+**Why on filtered PSD?** The bandpass filter has already removed out-of-band energy. Using the filtered PSD ensures the peak detection is not influenced by spectral leakage from strong low-frequency or high-frequency components.
+
+##### Step 7: In-Band SNR (Peak Signal-to-Noise Ratio)
+
+**What:** Measure how prominent the dominant peak is relative to the noise floor within the 2-8 Hz band.
+
+**Math:**
+
+```
+noise_bins  = all PSD bins in 2-8 Hz, EXCLUDING peak and its +/-1 neighbors
+noise_floor = mean(PSD[noise_bins])
+SNR_dB      = 10 * log10( PSD_peak / noise_floor )
+```
+
+The +/-1 bin exclusion (3 bins total = 0.75 Hz) accounts for spectral leakage around the peak. Without this exclusion, leaked energy from the peak would inflate the noise floor estimate.
+
+**Why:** SNR tells you whether the peak is a real concentrated signal or just the tallest point in a flat noise spectrum. A high SNR (e.g., > 10 dB) means the peak stands well above the noise, indicating a genuine periodic signal. This metric is reported informational only (no threshold applied).
+
+##### Step 8: Dominant Power Ratio (DPR)
+
+**What:** The fraction of total in-band power that is concentrated in a small window around the dominant frequency (+/-1 bin = +/-0.25 Hz, i.e. 3 bins / 0.75 Hz wide).
+
+**Math:**
+
+```
+peak_power = trapz( PSD[peak-1 .. peak+1], freq[peak-1 .. peak+1] )
+band_power = trapz( PSD[2-8 Hz],           freq[2-8 Hz]           )
+DPR        = peak_power / band_power
+```
+
+Both numerator and denominator use trapezoidal integration (`np.trapz`), so both are in consistent units of (m/s^2)^2 (integrated power). The ratio is dimensionless.
+
+**Why:** DPR answers: "What percentage of the tremor-band energy is concentrated at the dominant frequency?"
+
+- **DPR close to 1.0 (100%)**: Nearly all energy is concentrated at a single frequency — strong, clean periodic signal
+- **DPR close to 0**: Energy is spread evenly across the band — no dominant frequency, noise-like signal
+
+DPR complements SNR: SNR measures peak-to-noise contrast, while DPR measures energy concentration. A signal can have high SNR but low DPR if there are multiple strong peaks in the band.
+
+##### Step 9: FFT Magnitude Spectrum (Full Recording)
+
+**What:** Compute the discrete Fourier transform of the entire filtered signal and plot the magnitude spectrum.
+
+**Math:**
+
+```
+X[k] = SUM( x[n] * e^(-j*2*pi*k*n/N), n=0..N-1 )    (DFT)
+|X[k]|_norm = |X[k]| / N                               (normalized magnitude)
+f[k] = k * Fs / N                                       (frequency axis)
+```
+
+For a 120s recording at 100 Hz: N = 12,000 samples, giving frequency resolution:
+
+```
+df = Fs / N = 100 / 12000 = 0.00833 Hz
+```
+
+**Why include FFT in addition to Welch PSD?** The Welch PSD averages over segments, which smooths the spectrum and reduces variance but limits frequency resolution to 0.25 Hz (with 4s segments). The full-recording FFT provides 120x finer resolution (0.0083 Hz), revealing fine spectral structure like exact motor frequency, harmonics, and narrow sidebands that Welch averaging would blur together. The trade-off is higher variance (no averaging), but for a clean motor signal the peak is prominent enough.
+
+**Note:** Only the one-sided spectrum (0 to Nyquist = 50 Hz) is computed using `np.fft.rfft` for real-valued input. The plot is zoomed to 1-12 Hz for focus on the tremor band.
+
+##### Step 10: Zoomed Time-Domain Analysis (Consecutive 5-Second Windows)
+
+**What:** Extract two consecutive 5-second windows from the middle of the recording and analyze each.
+
+**Window placement:**
+
+```
+t_mid = t[N/2]                          (midpoint of recording)
+Window A: [t_mid - 5s,  t_mid]          (Fig 4)
+Window B: [t_mid,       t_mid + 5s]     (Fig 5)
+```
+
+**Cycle counting via rising zero-crossings:**
+
+For each window, rising zero-crossings of the filtered signal are detected:
+
+```
+For each sample i where filt[i-1] < 0 AND filt[i] >= 0:
+    frac = -filt[i-1] / (filt[i] - filt[i-1])          (linear interpolation)
+    t_cross = t[i-1] + frac * (t[i] - t[i-1])          (precise crossing time)
+    cycle_count += 1
+```
+
+The measured frequency from zero-crossing count:
+
+```
+f_measured = cycle_count / window_duration
+```
+
+This provides an independent time-domain frequency estimate that can be compared against the PSD peak frequency.
+
+**Hilbert envelope:**
+
+The analytic signal is computed via the Hilbert transform:
+
+```
+x_analytic[n] = x[n] + j * H{x[n]}
+envelope[n]   = |x_analytic[n]|
+```
+
+The envelope traces the instantaneous amplitude of the oscillation, showing amplitude modulation over time. This reveals whether the tremor amplitude is steady or fluctuating within the 5-second window.
+
+**Why two consecutive windows?** Comparing Window A and Window B (back-to-back) shows whether the tremor is stationary (stable frequency and amplitude) or non-stationary (drifting). For a motor-driven signal, both windows should show nearly identical cycle counts and envelope shapes. For real tremor, differences between windows may indicate tremor intermittency.
+
+#### Visualization (6 Figures)
+
+**Figure 1 — Filter Characteristics (2 subplots):**
+- Fig 1.1: Bode Magnitude — filter gain vs frequency for single-pass and filtfilt
+- Fig 1.2: Bode Phase — demonstrates filtfilt achieves zero phase
+
+**Figure 2 — Time Domain Analysis (2 broader subplots):**
+- Fig 2.1: Raw resultant vector magnitude over full recording, with RMS
+- Fig 2.2: Filtered resultant (2-8 Hz) with Hilbert envelope and RMS
+
+**Figure 3 — Frequency Domain Analysis (3 subplots, enlarged metrics):**
+- Fig 3.1: PSD full range (0-20 Hz) — raw and filtered with peak marker
+- Fig 3.2: PSD zoomed (1-12 Hz) — filtered PSD with PWM reference and deviation band
+- Fig 3.3: Enlarged metrics panel — frequency info, DPR, SNR, amplitude metrics
+
+**Figure 4 — Zoomed 5s Window A (2 subplots):**
+- Fig 4.1: Filtered signal with Hilbert envelope, numbered cycle markers, frequency from zero-crossing count
+- Fig 4.2: Raw vs filtered overlay on the same window
+
+**Figure 5 — Zoomed 5s Window B (2 subplots):**
+- Fig 5.1: Same as 4.1 but for the next consecutive 5 seconds
+- Fig 5.2: Same as 4.2 but for the next consecutive 5 seconds
+
+**Figure 6 — FFT Analysis (single full-width plot):**
+- FFT magnitude zoomed to 1-12 Hz, computed over the entire 120s recording, with PWM reference line and peak annotation
 
 ---
 
-## 🔐 Data Integrity Features
+## Quick Start
 
-✅ **Continuous Timestamps**: Pause/resume doesn't create time gaps
-✅ **One CSV Per Cycle**: Clean data segmentation
-✅ **Metadata Headers**: Self-documenting CSV files
-✅ **Event Logging**: Complete audit trail
-✅ **Data Validation**: Format checking on every line
-✅ **Error Tracking**: Quality metrics per cycle
-✅ **Graceful Shutdown**: No data loss on interruption
-✅ **Flush on Write**: Immediate disk persistence
+### Option A: Using System Manager (recommended)
 
----
+```bash
+# On RPI 4 — runs motor + recorder together, then analyzer
+python3 sys_manager.py
+```
 
-## 📝 Version History
+### Option B: Running Scripts Individually
 
-### v3 (Current)
-- Added ESP32 error event parsing
-- Implemented connection timeout detection
-- Added CSV data validation (7-column format)
-- Created per-cycle error logging system
-- Added metadata tracking (resets, errors, validation)
-- Enhanced cycle summaries with quality metrics
+```bash
+# Terminal 1: Start motor
+python3 motor_control.py
 
-### v2
-- Fixed one CSV per cycle (pause/resume bug)
-- Implemented continuous timestamps
-- Added cycle number tracking
+# Terminal 2: Start recorder
+python3 rpi_usb_recorder_v2.py
 
-### v1
-- Initial implementation
-- Basic serial communication
-- Simple CSV output
+# After recording completes — on PC or RPI:
+python3 offline_analyzer.py
+# Or use the experimental analyzer (no pass/fail, DPR, 5s zoom, FFT):
+python3 offline_analyzer_exp.py
+```
 
----
+### Option C: Running Each Script Standalone
 
-## 🎓 Educational Use
+```bash
+# Motor control (interactive CLI)
+python3 motor_control.py
+# Commands: "hz 5", "40" (duty%), "stop", "quit"
 
-This system is designed for:
-- **Medical Research**: Parkinson's disease tremor analysis
-- **Biomechanics Studies**: Motion capture and analysis
-- **Engineering Education**: Embedded systems, data acquisition
-- **Sensor Fusion**: IMU data processing
+# Recorder (auto-detects serial port)
+python3 rpi_usb_recorder_v2.py
+# Or specify port: python3 rpi_usb_recorder_v2.py /dev/ttyUSB0
 
----
-
-## 📧 Support
-
-For issues, questions, or contributions:
-- GitHub Issues: https://github.com/omerpatish8-oss/Proceesing-data-based-RPI4/issues
+# Offline analyzer (GUI — with pass/fail validation)
+python3 offline_analyzer.py
+# Experimental analyzer (GUI — informational metrics, no pass/fail)
+python3 offline_analyzer_exp.py
+# Load CSV → Enter PWM frequency → Click "Load CSV Data"
+```
 
 ---
 
-## 📄 License
+## Dependencies
 
-[Add your license information here]
+### RPI 4 / PC (Python 3)
+
+```
+numpy
+scipy
+matplotlib
+mplcursors
+tkinter (usually included with Python)
+RPi.GPIO (RPI only — for motor_control.py)
+pyserial (for rpi_usb_recorder_v2.py)
+```
+
+### ESP32 (Arduino)
+
+```
+Adafruit MPU6050
+Adafruit Unified Sensor
+Adafruit SSD1306
+Adafruit GFX
+Wire (built-in)
+```
 
 ---
 
-## 🙏 Acknowledgments
+## Data Flow Summary
 
-- Adafruit for excellent sensor libraries
-- ESP32 community for robust hardware platform
-- Raspberry Pi Foundation for accessible computing
-
----
-
-**Last Updated:** 2026-01-24
-**Version:** 3.1
-**Status:** Production Ready ✅
-
-**New in v3.1:**
-- Research-based offline tremor analyzer
-- Resultant vector magnitude analysis
-- Dual-band tremor classification (Rest 3-7 Hz + Essential 6-12 Hz)
-- Clinical metrics: Mean, RMS, Max amplitude, spectral power
-- 12-plot educational dashboard with Bode plots and PSD
-- Validated against peer-reviewed MPU6050 research
+```
+MPU6050                ESP32                    RPI Recorder           Offline Analyzer
+───────                ─────                    ────────────           ────────────────
+Accel X,Y,Z  ──I2C──→ Read registers    ──→   ser.readline()   ──→  Load CSV
+(raw LSB)              Convert to m/s^2        Validate 4 cols       DC offset removal
+                       Subtract offsets         Write to CSV          Resultant vector
+                       Stuck detection                                Bandpass 2-8 Hz
+                       Format CSV line                                Welch PSD
+                       Serial.printf()  ──UART──→                    Peak detection
+                       (100 Hz, 115200 baud)                          Validation
+                                                                      Plot results
+```

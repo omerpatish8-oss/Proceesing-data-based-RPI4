@@ -72,9 +72,8 @@ const int MAX_STUCK = 15;
 const int MAX_FAILED = 5;
 const float STUCK_THRESHOLD = 0.001;
 
-// Calibration
-float gX_off = 22.36, gY_off = 5.81, gZ_off = 0.17;
-float aX_off = 0.58,  aY_off = -0.20, aZ_off = -1.23;
+// Calibration (accelerometer only, for +/-2G range)
+float aX_off = 0.301009, aY_off = 0.016101, aZ_off = 1.046231;
 
 // ================================================================
 // SETUP
@@ -242,8 +241,7 @@ void handleButton() {
 bool initSensor() {
   if (!mpu.begin()) return false;
   
-  mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   
   stuckCount = 0;
@@ -283,13 +281,10 @@ void sampleSensor() {
   failedReads = 0;
   lastSuccessfulRead = millis();
   
-  // Calculate with offsets
+  // Calculate with offsets (accelerometer only)
   float ax = a.acceleration.x - aX_off;
   float ay = a.acceleration.y - aY_off;
   float az = a.acceleration.z - aZ_off;
-  float gx = (g.gyro.x * 57.296) - gX_off;
-  float gy = (g.gyro.y * 57.296) - gY_off;
-  float gz = (g.gyro.z * 57.296) - gZ_off;
   
   // Stuck detection
   bool stuck = (abs(ax - lastAx) < STUCK_THRESHOLD &&
@@ -315,9 +310,9 @@ void sampleSensor() {
   lastAy = ay;
   lastAz = az;
   
-  // Output CSV
-  Serial.printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                currentTotalTime, ax, ay, az, gx, gy, gz);
+  // Output CSV (accelerometer only)
+  Serial.printf("%lu,%.3f,%.3f,%.3f\n",
+                currentTotalTime, ax, ay, az);
 }
 
 void resetSensor() {
@@ -364,7 +359,7 @@ void startRecording() {
   
   Serial.println("START_RECORDING");
   Serial.printf("CYCLE,%d\n", currentCycle);
-  Serial.println("Timestamp,Ax,Ay,Az,Gx,Gy,Gz");
+  Serial.println("Timestamp,Ax,Ay,Az");
 }
 
 void stopRecording() {

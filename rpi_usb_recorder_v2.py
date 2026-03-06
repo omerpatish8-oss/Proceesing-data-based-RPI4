@@ -5,7 +5,7 @@ Improvements:
 - ESP32 error event handling (sensor stuck, resets, connection loss)
 - Error logging per cycle
 - Connection timeout detection
-- Data validation (7 columns)
+- Data validation (4 columns)
 - Metadata tracking (sensor resets, data quality)
 """
 
@@ -21,7 +21,7 @@ DEFAULT_PORT = '/dev/ttyUSB0'
 BAUD_RATE = 115200
 OUTPUT_FOLDER = 'tremor_data'
 CONNECTION_TIMEOUT = 5.0  # Seconds - alert if no data received
-EXPECTED_COLUMNS = 7      # Timestamp,Ax,Ay,Az,Gx,Gy,Gz
+EXPECTED_COLUMNS = 4      # Timestamp,Ax,Ay,Az
 
 def create_output_folder():
     if not os.path.exists(OUTPUT_FOLDER):
@@ -36,7 +36,7 @@ def log_event(log_file, event_type, message):
         log_file.flush()
 
 def validate_data_line(line):
-    """Validate CSV data line format (7 columns expected)"""
+    """Validate CSV data line format (4 columns expected)"""
     try:
         parts = line.split(',')
         if len(parts) != EXPECTED_COLUMNS:
@@ -200,7 +200,7 @@ def record_data(port):
                         csv_file.write(f"# Cycle: {current_cycle}\n")
                         csv_file.write(f"# Start Time: {cycle_metadata['start_time']}\n")
                         csv_file.write(f"# Sample Rate: 100 Hz\n")
-                        csv_file.write(f"# Format: Timestamp(ms),Ax(m/s²),Ay,Az,Gx(°/s),Gy,Gz\n")
+                        csv_file.write(f"# Format: Timestamp(ms),Ax(m/s²),Ay(m/s²),Az(m/s²)\n")
 
                         log_event(log_file, "INFO", f"Cycle {current_cycle} started")
 

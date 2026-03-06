@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """
-Rest Tremor Analysis Tool - Research-Based Implementation
-Focused on rest tremor (2-8 Hz) detection using resultant vector magnitude.
-Bandpass filter: 2-8 Hz (avoids edge attenuation at 3 and 7 Hz).
-Validation: user enters PWM frequency, system checks if PSD peak matches within +/-0.5 Hz
-and if the peak SNR >= 6 dB (peak is at least 4x above in-band noise floor).
-Based on MDPI papers: Parkinson's tremor assessment with MPU6050 + ESP32
+Rest Tremor Analysis Tool - EXPERIMENTAL Version
+Based on offline_analyzer.py with the following changes:
+  - No pass/fail criteria: frequency deviation and peak SNR are reported
+    as informational metrics only (no PASS/FAIL judgment).
+  - Peak SNR is calculated and Dominant Power Ratio (DPR) is derived from
+    peak PSD vs total band power — shows how concentrated the energy is.
+  - Fig 2: Raw and filtered resultant vector (2 broader plots, no overlay).
+  - Fig 3.3: Enlarged metrics panel with larger font.
+  - Fig 4: Zoomed filtered signal for a 5-second window (first half of a
+    10-second block taken from the middle of the recording).
+  - Fig 5: Zoomed filtered signal for the next consecutive 5-second window
+    (second half of the same 10-second block, directly after Fig 4).
+  - Fig 6: Single full-width FFT magnitude plot (1-12 Hz) over the full
+    120-second recording.
 """
 
 import tkinter as tk
@@ -36,20 +44,22 @@ FREQ_REST_HIGH = 8.0    # Rest tremor analysis upper bound (= filter high)
 WINDOW_SEC = 4          # Welch window size (seconds)
 PSD_OVERLAP = 0.5       # 50% overlap
 
-# Validation tolerance
-FREQ_TOLERANCE_HZ = 0.5 # Acceptable deviation from expected frequency
-SNR_THRESHOLD_DB = 6.0  # Minimum in-band SNR (peak must be >= 4x noise floor)
+# Validation tolerance (kept for deviation reporting, NOT for pass/fail)
+FREQ_TOLERANCE_HZ = 0.5 # Deviation reference from expected frequency
 
 # Visual styling
 COL_RAW = '#2F4F4F'         # Dark Slate Gray - Raw signal
 COL_FILTERED = '#FF6347'    # Tomato - Filtered signal
-COL_PASS = '#2ECC71'        # Green - Validation pass
-COL_FAIL = '#E74C3C'        # Red - Validation fail
+COL_INFO = '#3498DB'        # Blue - Informational (replaces pass/fail colors)
 
-class TremorAnalyzerResearch:
+# Zoomed window duration for Fig 4 and Fig 5
+ZOOM_DURATION_SEC = 5.0     # Each zoomed window is 5 seconds
+
+
+class TremorAnalyzerExperimental:
     def __init__(self, root):
         self.root = root
-        self.root.title("Rest Tremor Analyzer - Input/Output Validation (2-8 Hz)")
+        self.root.title("Rest Tremor Analyzer - EXPERIMENTAL (No Pass/Fail)")
         self.root.geometry("1600x1000")
 
         # Data storage
@@ -104,8 +114,8 @@ class TremorAnalyzerResearch:
         self.entry_pwm_freq.pack(side=tk.LEFT, padx=2)
         self.entry_pwm_freq.insert(0, "5.0")
 
-        # Validation result panel
-        self.result_frame = ttk.LabelFrame(control_frame, text="Validation Result",
+        # Info panel (replaces "Validation Result" - no pass/fail)
+        self.result_frame = ttk.LabelFrame(control_frame, text="Measurement Info",
                                            padding="5")
         self.result_frame.pack(side=tk.RIGHT, padx=10)
 
@@ -113,21 +123,19 @@ class TremorAnalyzerResearch:
                                            font=("Arial", 10))
         self.lbl_measured_freq.pack()
 
-        self.lbl_validation = ttk.Label(self.result_frame, text="Status: N/A",
+        self.lbl_validation = ttk.Label(self.result_frame, text="Deviation: N/A",
                                         font=("Arial", 11, "bold"))
         self.lbl_validation.pack()
 
     def create_analysis_dashboard(self):
-        """Create research-based analysis dashboard - MATLAB style separate figures"""
-        # Main container with notebook for separate figures
+        """Create research-based analysis dashboard - 6 figure tabs"""
         main_frame = ttk.Frame(self.root)
         main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create notebook (tabbed interface) for MATLAB-style figures
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Store figures, canvases, and axes
+        # Storage for figures, canvases, axes
         self.figures = []
         self.canvases = []
         self.all_axes = []
@@ -151,16 +159,15 @@ class TremorAnalyzerResearch:
         self.canvases.append(canvas1)
         self.all_axes.extend([self.ax_bode_mag, self.ax_bode_phase])
 
-        # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS ====================
+        # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS (2 broader plots) ====================
         fig2_frame = ttk.Frame(self.notebook)
         self.notebook.add(fig2_frame, text="Figure 2 - Resultant Vector")
 
         self.fig2 = plt.figure(figsize=(15, 4))
-        gs2 = GridSpec(1, 3, figure=self.fig2, hspace=0.3, wspace=0.3)
+        gs2 = GridSpec(1, 2, figure=self.fig2, hspace=0.3, wspace=0.3)
 
         self.ax_result_raw = self.fig2.add_subplot(gs2[0, 0])
         self.ax_result_filtered = self.fig2.add_subplot(gs2[0, 1])
-        self.ax_result_overlay = self.fig2.add_subplot(gs2[0, 2])
 
         canvas2 = FigureCanvasTkAgg(self.fig2, master=fig2_frame)
         canvas2.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -169,14 +176,16 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig2)
         self.canvases.append(canvas2)
-        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered, self.ax_result_overlay])
+        self.all_axes.extend([self.ax_result_raw, self.ax_result_filtered])
 
         # ==================== FIGURE 3: PSD ANALYSIS ====================
         fig3_frame = ttk.Frame(self.notebook)
         self.notebook.add(fig3_frame, text="Figure 3 - PSD Analysis")
 
-        self.fig3 = plt.figure(figsize=(15, 4))
-        gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.3)
+        self.fig3 = plt.figure(figsize=(15, 5))
+        # width_ratios: PSD full (2) | PSD zoom (2) | Metrics panel (3) — metrics gets more space
+        gs3 = GridSpec(1, 3, figure=self.fig3, hspace=0.3, wspace=0.35,
+                       width_ratios=[2, 2, 3])
 
         self.ax_psd_full = self.fig3.add_subplot(gs3[0, 0])
         self.ax_psd_zoom = self.fig3.add_subplot(gs3[0, 1])
@@ -191,15 +200,15 @@ class TremorAnalyzerResearch:
         self.canvases.append(canvas3)
         self.all_axes.extend([self.ax_psd_full, self.ax_psd_zoom, self.ax_metrics])
 
-        # ==================== FIGURE 4: ZOOMED TIME DOMAIN ====================
+        # ==================== FIGURE 4: ZOOMED FIRST 5s WINDOW ====================
         fig4_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig4_frame, text="Figure 4 - Zoomed Signal")
+        self.notebook.add(fig4_frame, text="Figure 4 - Zoomed 5s (A)")
 
         self.fig4 = plt.figure(figsize=(15, 4))
         gs4 = GridSpec(1, 2, figure=self.fig4, hspace=0.3, wspace=0.3)
 
-        self.ax_zoom_filt = self.fig4.add_subplot(gs4[0, 0])
-        self.ax_zoom_overlay = self.fig4.add_subplot(gs4[0, 1])
+        self.ax_zoom_a_filt = self.fig4.add_subplot(gs4[0, 0])
+        self.ax_zoom_a_overlay = self.fig4.add_subplot(gs4[0, 1])
 
         canvas4 = FigureCanvasTkAgg(self.fig4, master=fig4_frame)
         canvas4.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -208,7 +217,44 @@ class TremorAnalyzerResearch:
 
         self.figures.append(self.fig4)
         self.canvases.append(canvas4)
-        self.all_axes.extend([self.ax_zoom_filt, self.ax_zoom_overlay])
+        self.all_axes.extend([self.ax_zoom_a_filt, self.ax_zoom_a_overlay])
+
+        # ==================== FIGURE 5: ZOOMED NEXT 5s WINDOW ====================
+        fig5_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig5_frame, text="Figure 5 - Zoomed 5s (B)")
+
+        self.fig5 = plt.figure(figsize=(15, 4))
+        gs5 = GridSpec(1, 2, figure=self.fig5, hspace=0.3, wspace=0.3)
+
+        self.ax_zoom_b_filt = self.fig5.add_subplot(gs5[0, 0])
+        self.ax_zoom_b_overlay = self.fig5.add_subplot(gs5[0, 1])
+
+        canvas5 = FigureCanvasTkAgg(self.fig5, master=fig5_frame)
+        canvas5.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar5 = NavigationToolbar2Tk(canvas5, fig5_frame)
+        toolbar5.update()
+
+        self.figures.append(self.fig5)
+        self.canvases.append(canvas5)
+        self.all_axes.extend([self.ax_zoom_b_filt, self.ax_zoom_b_overlay])
+
+        # ==================== FIGURE 6: FFT OVER FULL 120s (single full-width plot) ====================
+        fig6_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig6_frame, text="Figure 6 - FFT (Full 120s)")
+
+        self.fig6 = plt.figure(figsize=(15, 4))
+        gs6 = GridSpec(1, 1, figure=self.fig6)
+
+        self.ax_fft_zoom = self.fig6.add_subplot(gs6[0, 0])
+
+        canvas6 = FigureCanvasTkAgg(self.fig6, master=fig6_frame)
+        canvas6.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar6 = NavigationToolbar2Tk(canvas6, fig6_frame)
+        toolbar6.update()
+
+        self.figures.append(self.fig6)
+        self.canvases.append(canvas6)
+        self.all_axes.extend([self.ax_fft_zoom])
 
         # Initialize plots
         self.clear_all_plots()
@@ -223,13 +269,11 @@ class TremorAnalyzerResearch:
             ax.set_xticks([])
             ax.set_yticks([])
 
-        # Draw all canvases
         for canvas in self.canvases:
             canvas.draw()
 
     def load_and_process(self):
         """Load CSV file and process data"""
-        # Get PWM frequency from input field
         try:
             self.pwm_freq = float(self.entry_pwm_freq.get())
             if self.pwm_freq <= 0:
@@ -239,7 +283,6 @@ class TremorAnalyzerResearch:
             messagebox.showerror("Error", "Invalid PWM frequency. Please enter a number.")
             return
 
-        # File dialog
         filepath = filedialog.askopenfilename(
             title="Select Tremor Data CSV",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
@@ -254,15 +297,9 @@ class TremorAnalyzerResearch:
         self.root.update()
 
         try:
-            # Load data
             self.data = self.load_csv_data(filepath)
-
-            # Process and visualize
             self.process_tremor_analysis()
-
             self.lbl_status.config(text="Analysis Complete", foreground="green")
-
-            # Enable interactive cursors
             mplcursors.cursor(hover=True)
 
         except Exception as e:
@@ -278,22 +315,19 @@ class TremorAnalyzerResearch:
         with open(filepath, 'r') as f:
             lines = f.readlines()
 
-            # Find header
             header_idx = 0
             for i, line in enumerate(lines):
                 if line.startswith('Timestamp,'):
                     header_idx = i
                     break
 
-            # Parse data
             for line in lines[header_idx + 1:]:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-
                 try:
                     parts = line.split(',')
-                    if len(parts) >= 4:  # Only need timestamp + Ax, Ay, Az
+                    if len(parts) >= 4:
                         data['Timestamp'].append(int(parts[0]))
                         data['Ax'].append(float(parts[1]))
                         data['Ay'].append(float(parts[2]))
@@ -301,7 +335,6 @@ class TremorAnalyzerResearch:
                 except (ValueError, IndexError):
                     continue
 
-        # Convert to numpy arrays
         for key in data:
             data[key] = np.array(data[key])
 
@@ -310,7 +343,6 @@ class TremorAnalyzerResearch:
     def process_tremor_analysis(self):
         """Main tremor analysis pipeline - Resultant vector only"""
 
-        # Extract data
         ax = self.data['Ax']
         ay = self.data['Ay']
         az = self.data['Az']
@@ -324,7 +356,7 @@ class TremorAnalyzerResearch:
         # Calculate resultant vector (magnitude)
         accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
 
-        # Create single tremor filter (2-8 Hz)
+        # Create tremor bandpass filter (2-8 Hz)
         nyquist = 0.5 * FS
         b_tremor, a_tremor = butter(FILTER_ORDER,
                                     [FREQ_TREMOR_LOW/nyquist, FREQ_TREMOR_HIGH/nyquist],
@@ -337,11 +369,10 @@ class TremorAnalyzerResearch:
         nperseg = min(len(accel_mag), int(FS * WINDOW_SEC))
         noverlap = int(nperseg * PSD_OVERLAP)
 
-        # PSD for resultant (raw and filtered)
         f_psd, psd_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
         _, psd_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
 
-        # Calculate metrics - peak detection on FILTERED PSD
+        # Calculate metrics - informational only, no pass/fail
         metrics = self.calculate_metrics(accel_mag, result_filtered, f_psd, psd_filt)
 
         # Visualize everything
@@ -352,8 +383,8 @@ class TremorAnalyzerResearch:
         )
 
     def calculate_metrics(self, accel_raw, accel_filt, freq, psd_filt):
-        """Calculate tremor metrics and validate against PWM frequency.
-        Peak detection uses the FILTERED PSD within 2-8 Hz band."""
+        """Calculate tremor metrics - INFORMATIONAL ONLY (no pass/fail).
+        Reports frequency deviation, peak SNR, and dominant power ratio."""
         metrics = {}
 
         # Resultant vector features
@@ -384,50 +415,41 @@ class TremorAnalyzerResearch:
             else:
                 metrics['snr_db'] = 0.0
                 metrics['noise_floor'] = 0.0
+
+            # Dominant Power Ratio (DPR): integrated power in a small window
+            # around the peak (+/-1 bin = +/-0.25 Hz), divided by total band
+            # power. Both use trapz for consistent area-under-curve integration.
+            # DPR = trapz(PSD[peak-1..peak+1]) / trapz(PSD[2-8 Hz])
+            pk_lo = max(0, peak_idx - 1)
+            pk_hi = min(len(band_psd), peak_idx + 2)  # exclusive end
+            peak_power = np.trapz(band_psd[pk_lo:pk_hi], band_freq[pk_lo:pk_hi])
+            # total_power already computed above via trapz over the full band
+            metrics['dominant_power_ratio'] = (
+                peak_power / metrics['total_power']
+                if metrics['total_power'] > 0 else 0.0
+            )
+
         else:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
             metrics['snr_db'] = 0.0
             metrics['noise_floor'] = 0.0
+            metrics['dominant_power_ratio'] = 0.0
 
-        # Input-Output Validation:
-        #   Condition 1: |PSD_peak - PWM_freq| <= 0.5 Hz (frequency match)
-        #   Condition 2: In-band SNR >= 6 dB (peak is real, not noise)
+        # Frequency deviation from PWM (informational, no pass/fail)
         measured_freq = metrics['dominant_freq']
         pwm_freq = self.pwm_freq
         deviation = abs(measured_freq - pwm_freq)
-
-        freq_ok = deviation <= FREQ_TOLERANCE_HZ
-        snr_ok = metrics['snr_db'] >= SNR_THRESHOLD_DB
-
-        if freq_ok and snr_ok:
-            metrics['validation_status'] = "PASS"
-            metrics['validation_color'] = COL_PASS
-        else:
-            metrics['validation_status'] = "FAIL"
-            metrics['validation_color'] = COL_FAIL
-
-        # Detailed fail reason
-        if not freq_ok and not snr_ok:
-            metrics['fail_reason'] = "freq + weak peak"
-        elif not freq_ok:
-            metrics['fail_reason'] = "freq mismatch"
-        elif not snr_ok:
-            metrics['fail_reason'] = "weak peak"
-        else:
-            metrics['fail_reason'] = ""
-
         metrics['deviation'] = deviation
         metrics['pwm_freq'] = pwm_freq
 
-        # Update UI
-        self.lbl_measured_freq.config(text=f"Measured: {measured_freq:.2f} Hz | SNR: {metrics['snr_db']:.1f} dB")
-        status_text = f"Status: {metrics['validation_status']}"
-        if metrics['fail_reason']:
-            status_text += f" ({metrics['fail_reason']})"
+        # Update UI labels - informational only
+        self.lbl_measured_freq.config(
+            text=f"Measured: {measured_freq:.2f} Hz | SNR: {metrics['snr_db']:.1f} dB"
+        )
         self.lbl_validation.config(
-            text=status_text,
-            foreground=metrics['validation_color']
+            text=f"Deviation: {deviation:.2f} Hz | DPR: {metrics['dominant_power_ratio']:.1%}",
+            foreground=COL_INFO
         )
 
         return metrics
@@ -435,23 +457,19 @@ class TremorAnalyzerResearch:
     def plot_analysis(self, t, result_raw, result_filt,
                      f_psd, psd_raw, psd_filt,
                      b_tremor, a_tremor, metrics):
-        """Plot complete analysis - resultant vector only"""
+        """Plot complete analysis - 6 figure tabs, no pass/fail coloring"""
 
         # ============================================================
         # FIGURE 1: FILTER CHARACTERISTICS
         # ============================================================
 
-        # Bode Magnitude - Show both single-pass and filtfilt (double attenuation)
         self.ax_bode_mag.clear()
         w, h = freqz(b_tremor, a_tremor, worN=4096, fs=FS)
         mag_single = 20*np.log10(abs(h))
-        mag_filtfilt = 2 * mag_single  # filtfilt = forward + backward = 2x in dB
+        mag_filtfilt = 2 * mag_single  # filtfilt doubles attenuation in dB
 
-        # Single-pass (for reference)
         self.ax_bode_mag.plot(w, mag_single, color='gray', linewidth=1.5,
                              linestyle='--', alpha=0.6, label='Single-pass (O4)')
-
-        # filtfilt = equivalent to Order 8 (double attenuation)
         self.ax_bode_mag.plot(w, mag_filtfilt, color='purple', linewidth=2,
                              label='filtfilt (effective O8)')
 
@@ -468,18 +486,14 @@ class TremorAnalyzerResearch:
         self.ax_bode_mag.grid(True, alpha=0.3)
         self.ax_bode_mag.legend(fontsize=7, loc='lower left')
 
-        # Bode Phase - Show both single-pass and filtfilt (zero-phase)
         self.ax_bode_phase.clear()
         single_pass_phase = np.unwrap(np.angle(h)) * 180/np.pi
 
-        # Single-pass phase (theoretical - for reference)
         self.ax_bode_phase.plot(w, single_pass_phase,
                                color='gray', linewidth=1.5, linestyle='--', alpha=0.6,
                                label='Single-pass (lfilter)')
-
-        # Zero-phase line (filtfilt result)
         self.ax_bode_phase.axhline(0, color='green', linewidth=2.5,
-                                   label='Zero-phase (filtfilt) ✓')
+                                   label='Zero-phase (filtfilt)')
 
         self.ax_bode_phase.axvline(FREQ_TREMOR_LOW, color='red', linestyle=':', alpha=0.5)
         self.ax_bode_phase.axvline(FREQ_TREMOR_HIGH, color='blue', linestyle=':', alpha=0.5)
@@ -496,7 +510,6 @@ class TremorAnalyzerResearch:
         # FIGURE 2: RESULTANT VECTOR ANALYSIS
         # ============================================================
 
-        # Raw resultant
         self.ax_result_raw.clear()
         self.ax_result_raw.plot(t, result_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
         self.ax_result_raw.set_title(f'Fig 2.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s^2',
@@ -506,11 +519,9 @@ class TremorAnalyzerResearch:
         self.ax_result_raw.grid(True, alpha=0.3)
         self.ax_result_raw.margins(x=0)
 
-        # Filtered resultant
         self.ax_result_filtered.clear()
         self.ax_result_filtered.plot(t, result_filt, color=COL_FILTERED, linewidth=1.2)
 
-        # Add envelope
         envelope_result = np.abs(hilbert(result_filt))
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
@@ -522,27 +533,10 @@ class TremorAnalyzerResearch:
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
 
-        # Overlay comparison
-        self.ax_result_overlay.clear()
-        self.ax_result_overlay.plot(t, result_raw, color=COL_RAW, linewidth=1,
-                                   alpha=0.5, label='Raw')
-        self.ax_result_overlay.plot(t, result_filt, color=COL_FILTERED, linewidth=1.5,
-                                   label='Filtered (2-8 Hz)')
-
-        self.ax_result_overlay.set_title('Fig 2.3 - Resultant: Raw vs Filtered', fontweight='bold')
-        self.ax_result_overlay.set_ylabel('Magnitude (m/s^2)')
-        self.ax_result_overlay.set_xlabel('Time (s)')
-        self.ax_result_overlay.grid(True, alpha=0.3)
-        self.ax_result_overlay.margins(x=0)
-        self.ax_result_overlay.legend(fontsize=8)
-
         # ============================================================
-        # FIGURE 3: PSD ANALYSIS
+        # FIGURE 3: PSD ANALYSIS (no pass/fail coloring)
         # ============================================================
 
-        expected_color = metrics['validation_color']
-
-        # PSD full range (0-20 Hz)
         self.ax_psd_full.clear()
         psd_raw_db = 10*np.log10(psd_raw + 1e-12)
         psd_filt_db = 10*np.log10(psd_filt + 1e-12)
@@ -552,14 +546,12 @@ class TremorAnalyzerResearch:
         self.ax_psd_full.plot(f_psd, psd_filt_db, color=COL_FILTERED,
                              linewidth=1.5, label='Filtered')
 
-        # Mark dominant frequency on FILTERED curve
         if metrics['dominant_freq'] > 0:
             peak_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
             self.ax_psd_full.plot(metrics['dominant_freq'], peak_db, 'o',
                                 color='red', markersize=8,
                                 label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
-        # Highlight analysis band (2-8 Hz)
         self.ax_psd_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
                                 color='yellow', alpha=0.15, label='Analysis 2-8 Hz')
 
@@ -570,25 +562,23 @@ class TremorAnalyzerResearch:
         self.ax_psd_full.grid(True, alpha=0.3)
         self.ax_psd_full.legend(fontsize=7)
 
-        # PSD zoomed to tremor range (1-12 Hz)
+        # PSD zoomed to tremor range (1-12 Hz) - informational deviation band
         self.ax_psd_zoom.clear()
 
         self.ax_psd_zoom.plot(f_psd, psd_filt_db, color=COL_FILTERED,
                              linewidth=1.5, label='Filtered PSD')
 
-        # Show PWM frequency and tolerance band (±0.5 Hz)
         pwm_freq = metrics['pwm_freq']
         self.ax_psd_zoom.axvline(pwm_freq, color='blue', linestyle='-', alpha=0.7,
                                 linewidth=1.5, label=f'PWM Freq: {pwm_freq:.1f} Hz')
+        # Informational reference band (no pass/fail color)
         self.ax_psd_zoom.axvspan(pwm_freq - FREQ_TOLERANCE_HZ, pwm_freq + FREQ_TOLERANCE_HZ,
-                               color=expected_color, alpha=0.2,
-                               label=f'Tolerance \u00b1{FREQ_TOLERANCE_HZ} Hz')
+                               color=COL_INFO, alpha=0.15,
+                               label=f'Reference \u00b1{FREQ_TOLERANCE_HZ} Hz')
 
-        # Highlight analysis band (2-8 Hz)
         self.ax_psd_zoom.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
                                 color='yellow', alpha=0.1, label='Analysis 2-8 Hz')
 
-        # Mark dominant frequency on FILTERED curve
         if metrics['dominant_freq'] > 0:
             peak_db = 10*np.log10(metrics['peak_power_density'] + 1e-12)
             self.ax_psd_zoom.plot(metrics['dominant_freq'], peak_db, 'o',
@@ -602,62 +592,133 @@ class TremorAnalyzerResearch:
         self.ax_psd_zoom.grid(True, alpha=0.3)
         self.ax_psd_zoom.legend(fontsize=7)
 
-        # Metrics & Validation Table (new Fig 3.3)
+        # Metrics table - informational only, no pass/fail
         self.ax_metrics.clear()
         self.ax_metrics.axis('off')
 
-        status_symbol = "V" if metrics['validation_status'] == "PASS" else "X"
-        fail_info = f"  ({metrics['fail_reason']})" if metrics['fail_reason'] else ""
-
-        metrics_text = f"""INPUT-OUTPUT VALIDATION
-{'='*40}
-PWM Frequency:  {metrics['pwm_freq']:.2f} Hz
-PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz
-Deviation:      {metrics['deviation']:.2f} Hz
-Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)
-Peak SNR:       {metrics['snr_db']:.1f} dB (threshold: {SNR_THRESHOLD_DB:.0f} dB)
-Noise Floor:    {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
-Status:         [{status_symbol}] {metrics['validation_status']}{fail_info}
+        metrics_text = f"""MEASUREMENT INFO (No Pass/Fail)
+{'='*44}
+PWM Frequency:       {metrics['pwm_freq']:.2f} Hz
+PSD Peak Freq:       {metrics['dominant_freq']:.2f} Hz
+Deviation:           {metrics['deviation']:.2f} Hz
+Reference:           +/-{FREQ_TOLERANCE_HZ:.2f} Hz
+Peak SNR:            {metrics['snr_db']:.1f} dB
+Noise Floor:         {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
+Dom. Power Ratio:    {metrics['dominant_power_ratio']:.1%}
 
 RESULTANT VECTOR METRICS
-{'='*40}
-RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2
-Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2
-Max Amplitude:  {metrics['accel_max']:.4f} m/s^2
+{'='*44}
+RMS Amplitude:       {metrics['accel_rms']:.4f} m/s^2
+Mean Amplitude:      {metrics['accel_mean']:.4f} m/s^2
+Max Amplitude:       {metrics['accel_max']:.4f} m/s^2
 
 REST TREMOR ANALYSIS (2-8 Hz)
-{'='*40}
-Dominant Freq:  {metrics['dominant_freq']:.2f} Hz
-Peak PSD:       {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
-Band Power:     {metrics['total_power']:.6f} (m/s^2)^2
-Filter:         2-8 Hz (Butterworth O4, filtfilt)
+{'='*44}
+Dominant Freq:       {metrics['dominant_freq']:.2f} Hz
+Peak PSD:            {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
+Band Power:          {metrics['total_power']:.6f} (m/s^2)^2
+Filter:              2-8 Hz (Butterworth O4, filtfilt)
 """
 
-        bg_color = metrics['validation_color']
-        self.ax_metrics.text(0.05, 0.95, metrics_text,
+        self.ax_metrics.text(0.03, 0.97, metrics_text,
                             transform=self.ax_metrics.transAxes,
-                            fontfamily='monospace', fontsize=8,
+                            fontfamily='monospace', fontsize=9.5,
                             verticalalignment='top',
-                            bbox=dict(boxstyle='round,pad=0.5', facecolor=bg_color, alpha=0.15))
-        self.ax_metrics.set_title('Fig 3.3 - Metrics & Validation', fontweight='bold', loc='left')
+                            bbox=dict(boxstyle='round,pad=0.5', facecolor=COL_INFO, alpha=0.15))
+        self.ax_metrics.set_title('Fig 3.3 - Metrics (Informational)', fontweight='bold', loc='left')
 
         # ============================================================
-        # FIGURE 4: ZOOMED TIME DOMAIN (3-second window at mid-recording)
+        # FIGURE 4 & 5: TWO CONSECUTIVE 5-SECOND WINDOWS
         # ============================================================
+        # Pick two sequential 5s windows from the middle of the recording.
+        # Window A starts at t_mid - 5s, ends at t_mid.
+        # Window B starts at t_mid,     ends at t_mid + 5s.
+        # This gives 10 consecutive seconds split into two tabs.
 
-        # Pick a 3-second window from the middle of the recording
-        zoom_duration = 3.0  # seconds
         t_mid = t[len(t) // 2]
-        zoom_start = t_mid - zoom_duration / 2
-        zoom_end = t_mid + zoom_duration / 2
+        zoom_a_start = t_mid - ZOOM_DURATION_SEC
+        zoom_a_end = t_mid
+        zoom_b_start = t_mid
+        zoom_b_end = t_mid + ZOOM_DURATION_SEC
+
+        # Fig 4: first 5s window (A)
+        self._plot_zoomed_window(
+            t, result_raw, result_filt, metrics,
+            ax_filt=self.ax_zoom_a_filt,
+            ax_overlay=self.ax_zoom_a_overlay,
+            zoom_start=zoom_a_start,
+            zoom_end=zoom_a_end,
+            fig_prefix='4',
+            window_label='A'
+        )
+
+        # Fig 5: next consecutive 5s window (B)
+        self._plot_zoomed_window(
+            t, result_raw, result_filt, metrics,
+            ax_filt=self.ax_zoom_b_filt,
+            ax_overlay=self.ax_zoom_b_overlay,
+            zoom_start=zoom_b_start,
+            zoom_end=zoom_b_end,
+            fig_prefix='5',
+            window_label='B'
+        )
+
+        # ============================================================
+        # FIGURE 6: FFT OVER FULL 120s
+        # ============================================================
+        self._plot_fft_full(result_filt, result_raw, metrics)
+
+        # Draw all canvases
+        for canvas in self.canvases:
+            canvas.draw()
+
+        # Print informational summary to console
+        print("\n" + "="*70)
+        print("MEASUREMENT RESULTS (EXPERIMENTAL - NO PASS/FAIL)")
+        print("="*70)
+        print(f"\nFREQUENCY INFO:")
+        print(f"  PWM Frequency:     {metrics['pwm_freq']:.2f} Hz")
+        print(f"  PSD Peak Freq:     {metrics['dominant_freq']:.2f} Hz")
+        print(f"  Deviation:         {metrics['deviation']:.2f} Hz")
+        print(f"  Reference:         +/-{FREQ_TOLERANCE_HZ:.2f} Hz")
+        print(f"  Peak SNR:          {metrics['snr_db']:.1f} dB")
+        print(f"  Noise Floor:       {metrics['noise_floor']:.6f} (m/s^2)^2/Hz")
+        print(f"  Dom. Power Ratio:  {metrics['dominant_power_ratio']:.1%}")
+        print(f"\nRESULTANT VECTOR METRICS:")
+        print(f"  RMS Amplitude:     {metrics['accel_rms']:.4f} m/s^2")
+        print(f"  Mean Amplitude:    {metrics['accel_mean']:.4f} m/s^2")
+        print(f"  Max Amplitude:     {metrics['accel_max']:.4f} m/s^2")
+        print(f"\nREST TREMOR ANALYSIS (2-8 Hz):")
+        print(f"  Filter:            2-8 Hz (Butterworth Order 4, filtfilt)")
+        print(f"  Dominant Freq:     {metrics['dominant_freq']:.2f} Hz")
+        print(f"  Peak PSD:          {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz")
+        print(f"  Band Power:        {metrics['total_power']:.6f} (m/s^2)^2")
+        print("="*70 + "\n")
+
+    # ------------------------------------------------------------------
+    # Helper: plot a 5-second zoomed window (reused for Fig 4 and Fig 5)
+    # ------------------------------------------------------------------
+    def _plot_zoomed_window(self, t, result_raw, result_filt, metrics,
+                            ax_filt, ax_overlay,
+                            zoom_start, zoom_end,
+                            fig_prefix, window_label):
+        """Plot a 5-second zoomed window with Hilbert envelope and cycle markers.
+
+        Args:
+            zoom_start: start time of the window (seconds).
+            zoom_end:   end time of the window (seconds).
+            fig_prefix: '4' or '5' for title numbering.
+            window_label: 'A' or 'B' to distinguish the two consecutive windows.
+        """
         zoom_mask = (t >= zoom_start) & (t <= zoom_end)
         t_zoom = t[zoom_mask]
         filt_zoom = result_filt[zoom_mask]
         raw_zoom = result_raw[zoom_mask]
 
-        # Expected period from dominant frequency
         dom_freq = metrics['dominant_freq']
-        expected_period = 1.0 / dom_freq if dom_freq > 0 else 0
+
+        # Actual duration of this window (accounts for sample boundaries)
+        actual_duration = t_zoom[-1] - t_zoom[0] if len(t_zoom) > 1 else ZOOM_DURATION_SEC
 
         # Count complete cycles via rising zero-crossings
         cycle_count = 0
@@ -672,84 +733,110 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
                     cycle_count += 1
 
         # Measured frequency from zero-crossing count
-        measured_freq_zc = cycle_count / zoom_duration if zoom_duration > 0 else 0
+        measured_freq_zc = cycle_count / actual_duration if actual_duration > 0 else 0
 
-        # Fig 4.1: Zoomed filtered signal with individual cycles
-        self.ax_zoom_filt.clear()
-        self.ax_zoom_filt.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5)
+        # -- Subplot 1: Filtered signal with Hilbert envelope and cycle markers --
+        ax_filt.clear()
+        ax_filt.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5)
 
-        # Envelope on zoomed view
+        # Hilbert envelope
         if len(filt_zoom) > 10:
             env_zoom = np.abs(hilbert(filt_zoom))
-            self.ax_zoom_filt.plot(t_zoom, env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
-            self.ax_zoom_filt.plot(t_zoom, -env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+            ax_filt.plot(t_zoom, env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
+            ax_filt.plot(t_zoom, -env_zoom, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        # Mark each rising zero-crossing with a numbered marker
+        # Mark each rising zero-crossing with a numbered blue marker
         for idx, t_cross in enumerate(crossing_times):
-            self.ax_zoom_filt.axvline(x=t_cross, color='#2196F3', linewidth=0.8, alpha=0.5)
-            self.ax_zoom_filt.text(t_cross, self.ax_zoom_filt.get_ylim()[1] * 0.85,
-                                   str(idx + 1), ha='center', fontsize=7, fontweight='bold',
-                                   color='#1565C0')
+            ax_filt.axvline(x=t_cross, color='#2196F3', linewidth=0.8, alpha=0.5)
+            ax_filt.text(t_cross, ax_filt.get_ylim()[1] * 0.85,
+                         str(idx + 1), ha='center', fontsize=7, fontweight='bold',
+                         color='#1565C0')
 
-        self.ax_zoom_filt.set_title(
-            f'Fig 4.1 - Filtered Zoomed ({zoom_duration:.0f}s) | '
+        ax_filt.set_title(
+            f'Fig {fig_prefix}.1 - Filtered Zoomed {window_label} '
+            f'[{zoom_start:.1f}s-{zoom_end:.1f}s] | '
             f'Cycles: {cycle_count} | '
-            f'{cycle_count}/{zoom_duration:.0f}s = {measured_freq_zc:.2f} Hz '
+            f'{cycle_count}/{actual_duration:.1f}s = {measured_freq_zc:.2f} Hz '
             f'(PSD: {dom_freq:.2f} Hz)',
             fontweight='bold', fontsize=9)
-        self.ax_zoom_filt.set_ylabel('Magnitude (m/s²)')
-        self.ax_zoom_filt.set_xlabel('Time (s)')
-        self.ax_zoom_filt.grid(True, alpha=0.3)
+        ax_filt.set_ylabel('Magnitude (m/s\u00b2)')
+        ax_filt.set_xlabel('Time (s)')
+        ax_filt.grid(True, alpha=0.3)
 
-        # Fig 4.2: Zoomed raw vs filtered overlay
-        self.ax_zoom_overlay.clear()
-        self.ax_zoom_overlay.plot(t_zoom, raw_zoom, color=COL_RAW, linewidth=1,
-                                  alpha=0.5, label='Raw')
-        self.ax_zoom_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
-                                  label='Filtered (2-8 Hz)')
+        # -- Subplot 2: Raw vs filtered overlay --
+        ax_overlay.clear()
+        ax_overlay.plot(t_zoom, raw_zoom, color=COL_RAW, linewidth=1,
+                        alpha=0.5, label='Raw')
+        ax_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
+                        label='Filtered (2-8 Hz)')
 
-        # Mark zero-crossings on overlay too
         for t_cross in crossing_times:
-            self.ax_zoom_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
+            ax_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
 
-        self.ax_zoom_overlay.set_title(
-            f'Fig 4.2 - Raw vs Filtered Zoomed ({zoom_duration:.0f}s)',
+        ax_overlay.set_title(
+            f'Fig {fig_prefix}.2 - Raw vs Filtered {window_label} '
+            f'[{zoom_start:.1f}s-{zoom_end:.1f}s]',
             fontweight='bold', fontsize=9)
-        self.ax_zoom_overlay.set_ylabel('Magnitude (m/s²)')
-        self.ax_zoom_overlay.set_xlabel('Time (s)')
-        self.ax_zoom_overlay.grid(True, alpha=0.3)
-        self.ax_zoom_overlay.legend(fontsize=8)
+        ax_overlay.set_ylabel('Magnitude (m/s\u00b2)')
+        ax_overlay.set_xlabel('Time (s)')
+        ax_overlay.grid(True, alpha=0.3)
+        ax_overlay.legend(fontsize=8)
 
-        # Draw all canvases
-        for canvas in self.canvases:
-            canvas.draw()
+    # ------------------------------------------------------------------
+    # Helper: FFT over full recording
+    # ------------------------------------------------------------------
+    def _plot_fft_full(self, result_filt, result_raw, metrics):
+        """Compute and plot FFT magnitude spectrum over the full recording.
 
-        # Print to console
-        print("\n" + "="*70)
-        print("INPUT-OUTPUT VALIDATION RESULTS")
-        print("="*70)
-        print(f"\nVALIDATION:")
-        print(f"  PWM Frequency:  {metrics['pwm_freq']:.2f} Hz")
-        print(f"  PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz")
-        print(f"  Deviation:      {metrics['deviation']:.2f} Hz")
-        print(f"  Tolerance:      +/-{FREQ_TOLERANCE_HZ:.2f} Hz (2 x 0.25 Hz)")
-        print(f"  Peak SNR:       {metrics['snr_db']:.1f} dB (threshold: {SNR_THRESHOLD_DB:.0f} dB)")
-        print(f"  Noise Floor:    {metrics['noise_floor']:.6f} (m/s^2)^2/Hz")
-        fail_str = f"  ({metrics['fail_reason']})" if metrics['fail_reason'] else ""
-        print(f"  Status:         {metrics['validation_status']}{fail_str}")
-        print(f"\nRESULTANT VECTOR METRICS:")
-        print(f"  RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2")
-        print(f"  Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2")
-        print(f"  Max Amplitude:  {metrics['accel_max']:.4f} m/s^2")
-        print(f"\nREST TREMOR ANALYSIS (2-8 Hz):")
-        print(f"  Filter:         2-8 Hz (Butterworth Order 4, filtfilt)")
-        print(f"  Dominant Freq:  {metrics['dominant_freq']:.2f} Hz")
-        print(f"  Peak PSD:       {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz")
-        print(f"  Band Power:     {metrics['total_power']:.6f} (m/s^2)^2")
-        print("="*70 + "\n")
+        Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
+        """
+        N = len(result_filt)
+
+        # Compute FFT of filtered signal
+        fft_vals = np.fft.rfft(result_filt)
+        fft_freqs = np.fft.rfftfreq(N, d=1.0/FS)
+        fft_magnitude = np.abs(fft_vals) / N  # Normalize by sample count
+
+        # Find peak in the 2-8 Hz band on the filtered FFT
+        band_mask = (fft_freqs >= FREQ_REST_LOW) & (fft_freqs <= FREQ_REST_HIGH)
+        if np.sum(band_mask) > 0:
+            band_mag = fft_magnitude[band_mask]
+            band_freq = fft_freqs[band_mask]
+            fft_peak_idx = np.argmax(band_mag)
+            fft_peak_freq = band_freq[fft_peak_idx]
+            fft_peak_mag = band_mag[fft_peak_idx]
+        else:
+            fft_peak_freq = 0
+            fft_peak_mag = 0
+
+        # -- Fig 6: FFT zoomed into 1-12 Hz (full-width single plot) --
+        self.ax_fft_zoom.clear()
+        self.ax_fft_zoom.plot(fft_freqs, fft_magnitude, color=COL_FILTERED,
+                             linewidth=1.5, label='Filtered FFT')
+
+        pwm_freq = metrics['pwm_freq']
+        self.ax_fft_zoom.axvline(pwm_freq, color='blue', linestyle='-', alpha=0.7,
+                                linewidth=1.5, label=f'PWM Freq: {pwm_freq:.1f} Hz')
+
+        self.ax_fft_zoom.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
+                                color='yellow', alpha=0.1, label='2-8 Hz band')
+
+        if fft_peak_freq > 0:
+            self.ax_fft_zoom.plot(fft_peak_freq, fft_peak_mag, 'o',
+                                color='red', markersize=10,
+                                label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
+
+        self.ax_fft_zoom.set_title(
+            f'Fig 6 - FFT (1-12 Hz, Full {N/FS:.0f}s) | Peak: {fft_peak_freq:.2f} Hz',
+            fontweight='bold')
+        self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
+        self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
+        self.ax_fft_zoom.set_xlim(1, 12)
+        self.ax_fft_zoom.grid(True, alpha=0.3)
+        self.ax_fft_zoom.legend(fontsize=7)
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = TremorAnalyzerResearch(root)
+    app = TremorAnalyzerExperimental(root)
     root.mainloop()
