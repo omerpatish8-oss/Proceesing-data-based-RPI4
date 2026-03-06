@@ -74,6 +74,110 @@ RPI 4 Side (L298N Motor Driver):
   Motor     → OUT1/OUT2
 ```
 
+### Power Budget Table
+
+The system has two independent power domains: **5V USB** (RPI4 + ESP32 subsystem) and **12V external** (motor subsystem). Below is a per-component breakdown with voltage, current, and calculations derived from datasheets and circuit values.
+
+#### Power Domain 1: 5V USB (Data Acquisition)
+
+| # | Component | Role | Input Voltage | Operating Voltage | Current (Typical) | Current (Max) | Calculation / Notes |
+|---|-----------|------|---------------|-------------------|-------------------|---------------|---------------------|
+| 1 | **Raspberry Pi 4 Model B** | Host processor: DSP, file I/O, GUI, motor PWM | 5.1V USB-C | 5.1V (onboard regulators to 3.3V/1.8V) | ~600 mA | 1.2 A | Datasheet typical idle. Excludes USB peripherals. Powered by USB-C 5.1V/3A PSU |
+| 2 | **ESP32 DevKit V1** | Sampling controller: I2C sensor read, UART transmit, state machine | 5V (USB from RPI4) | 3.3V (onboard AMS1117-3.3 LDO) | ~50 mA | ~80 mA | Active mode, Wi-Fi/BT disabled, dual-core 240 MHz. LDO dropout: V_in(5V) → V_out(3.3V), P_LDO = (5 - 3.3) × 0.05 = 85 mW. USB draw from RPI4: ~50 mA at 5V |
+| 3 | **MPU6050** | 3-axis accelerometer (±2g, 16-bit ADC, I2C) | 3.3V (from ESP32) | 3.3V | 3.9 mA | 3.9 mA | Datasheet: all sensors active (accel + gyro), DLPF at 21 Hz. I2C @ 400 kHz Fast Mode. Gyro not used by FW but not explicitly disabled |
+| 4 | **SSD1306 OLED 0.96"** | Status display: countdown timer, cycle number, state | 3.3V (from ESP32) | 3.3V | ~20 mA | ~20 mA | 128×64 pixels, I2C @ 400 kHz (Wire1, address 0x3C). Current depends on pixels lit; 20 mA is typical with mixed content |
+| 5 | **Green LED** (GPIO 15) | Status: blink in IDLE (1s), fast blink in RECORDING (200ms), solid in FINISHED | 3.3V (ESP32 GPIO) | ~2.0V (V_fwd) | **5.9 mA** | 5.9 mA | I = (V_GPIO - V_fwd) / R = (3.3V - 2.0V) / 220Ω = **1.3V / 220Ω = 5.9 mA** |
+| 6 | **Red LED** (GPIO 2) | Status: blink in PAUSED (800ms), blink in WAITING_NEXT (500ms), solid on error | 3.3V (ESP32 GPIO) | ~1.8V (V_fwd) | **6.8 mA** | 6.8 mA | I = (V_GPIO - V_fwd) / R = (3.3V - 1.8V) / 220Ω = **1.5V / 220Ω = 6.8 mA** |
+| 7 | **Push Button** (GPIO 13) | User input: start/pause/resume recording | 3.3V pull-up | — | 0 mA (open) / **0.70 mA** (pressed) | 0.70 mA | External 4.7kΩ pull-up to 3.3V. When pressed (GPIO LOW): I = 3.3V / 4.7kΩ = **0.70 mA**. FW also enables internal pull-up (~45kΩ), parallel: 4.7k ∥ 45k ≈ 4.25kΩ → 0.78 mA. Momentary press only |
+
+**ESP32 subsystem total (worst-case, all indicators ON simultaneously):**
+
+```
+I_ESP32_total = I_ESP32 + I_MPU6050 + I_OLED + I_LED_green + I_LED_red + I_button
+             = 50 + 3.9 + 20 + 5.9 + 6.8 + 0.7
+             = 87.3 mA (at 3.3V rail)
+
+USB current drawn from RPI4 (5V):
+  I_USB = (3.3V × 87.3 mA) / (5V × η_LDO)     where η_LDO ≈ 3.3/5 = 66%
+        ≈ 87.3 mA × (3.3/5) / (3.3/5) = 87.3 mA (LDO is linear, I_in ≈ I_out)
+  P_USB = 5V × 87.3 mA = 436.5 mW
+  P_LDO_waste = (5V - 3.3V) × 87.3 mA = 148.4 mW (dissipated as heat in AMS1117)
+```
+
+**RPI4 total power (including ESP32 USB peripheral):**
+
+```
+I_RPI4_PSU = I_RPI4 + I_ESP32_USB = 600 + 87.3 ≈ 687 mA (typical)
+P_RPI4_total = 5.1V × 687 mA ≈ 3.5 W
+```
+
+#### Power Domain 2: 12V External (Motor Simulation)
+
+| # | Component | Role | Input Voltage | Operating Voltage | Current (Typical) | Current (Max) | Calculation / Notes |
+|---|-----------|------|---------------|-------------------|-------------------|---------------|---------------------|
+| 8 | **12V DC Power Supply** | Powers motor driver and motor | 220V AC mains | 12V DC output | ~300 mA | 2+ A | Must supply motor stall current + L298N quiescent. Recommended: 12V/2A minimum |
+| 9 | **L298N Motor Driver** | H-bridge: controls motor direction and speed via PWM | 12V (from PSU) | 12V motor / 5V logic (onboard 78M05 regulator) | ~36 mA (quiescent) | 2 A (per channel) | Saturation voltage drop: V_CE(sat) ≈ 1.0V per transistor × 2 (high + low side) = **~2V total drop**. Motor sees: V_motor = (12V - 2V) × Duty% = 10V × Duty%. Logic inputs (IN1, IN2, ENA) from RPI4 GPIO 3.3V — L298N threshold: V_IH = 2.3V, so 3.3V is valid HIGH |
+| 10 | **DC Gearbox Motor (JGA25-370)** | Generates vibration via eccentric mass (40g) rotation | 12V (via L298N) | Effective: (12 - 2) × Duty% | ~40 mA (no-load) | 2 A (stall) | 625 RPM max at 12V. Typical running current with eccentric mass at mid-speed (~5 Hz, 50% duty): ~200-400 mA |
+| 11 | **RPI4 GPIO → L298N** | Control signals: PWM (GPIO 18), Direction (GPIO 23, 24) | 3.3V (RPI4 GPIO) | 3.3V | < 1 mA total | ~2 mA | L298N input impedance is high (~40kΩ). I per pin ≈ 3.3V / 40kΩ ≈ 0.08 mA. Three pins total: ~0.25 mA. Well within RPI4 GPIO max (16 mA/pin) |
+
+**Motor subsystem power at typical operating point (5 Hz tremor simulation, ~50% duty):**
+
+```
+V_motor_effective = (12V - 2V) × 50% = 5.0V average
+I_motor ≈ 300 mA (estimated with 40g eccentric load)
+P_motor = 12V × 300 mA = 3.6 W (from supply)
+P_L298N_loss = 2V × 300 mA = 0.6 W (heat in H-bridge)
+P_motor_mechanical = 5.0V × 300 mA = 1.5 W (delivered to motor)
+P_L298N_quiescent = 12V × 36 mA = 0.43 W
+```
+
+#### System Power Summary
+
+| Power Domain | Source | Voltage | Typical Current | Typical Power | Notes |
+|-------------|--------|---------|----------------|--------------|-------|
+| Data Acquisition | USB-C PSU → RPI4 | 5.1V | ~690 mA | ~3.5 W | RPI4 + ESP32 (USB) + all peripherals |
+| Motor Simulation | External DC PSU | 12V | ~340 mA | ~4.1 W | L298N + motor at ~50% duty |
+| **System Total** | **Two supplies** | — | — | **~7.6 W** | Excludes monitor/keyboard if attached to RPI4 |
+
+#### LED Resistor Calculation Detail
+
+```
+Green LED (GPIO 15, R = 220Ω):
+  V_GPIO = 3.3V (ESP32 output HIGH)
+  V_fwd  = 2.0V (typical green LED forward voltage)
+  I_LED  = (3.3 - 2.0) / 220 = 5.9 mA
+  P_R    = I² × R = (5.9 mA)² × 220Ω = 7.7 mW
+  P_LED  = I × V_fwd = 5.9 mA × 2.0V = 11.8 mW
+
+Red LED (GPIO 2, R = 220Ω):
+  V_GPIO = 3.3V (ESP32 output HIGH)
+  V_fwd  = 1.8V (typical red LED forward voltage)
+  I_LED  = (3.3 - 1.8) / 220 = 6.8 mA
+  P_R    = I² × R = (6.8 mA)² × 220Ω = 10.2 mW
+  P_LED  = I × V_fwd = 6.8 mA × 1.8V = 12.2 mW
+```
+
+Both LEDs operate well within the ESP32 GPIO maximum source current of 40 mA per pin, and well within typical LED ratings (20 mA max).
+
+#### Button Pull-Up Calculation Detail
+
+```
+External pull-up resistor: R = 4.7kΩ to 3.3V
+FW also enables internal pull-up: R_int ≈ 45kΩ (ESP32 typical)
+Parallel combination: R_eff = (4.7k × 45k) / (4.7k + 45k) = 4.26kΩ
+
+Button released (GPIO reads HIGH):
+  No current flows through pull-up (no path to GND)
+  GPIO reads 3.3V → digitalRead = HIGH → no action
+
+Button pressed (GPIO reads LOW):
+  Pull-up connects 3.3V through R to GND via button
+  I = 3.3V / 4.26kΩ = 0.78 mA
+  P = 3.3V × 0.78 mA = 2.6 mW (momentary, only while pressed)
+
+Debounce: FW uses 500 ms software debounce (lastDebounceTime check)
+```
+
 ---
 
 ## Pipeline Walkthrough
