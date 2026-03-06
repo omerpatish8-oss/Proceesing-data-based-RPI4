@@ -171,11 +171,11 @@ def main():
 
     launch = input("  Open offline analyzer? (y/n): ").strip().lower()
     if launch in ('y', 'yes', ''):
-        print("  Starting offline_analyzer.py...")
-        subprocess.Popen([sys.executable, "offline_analyzer.py"])
+        print("  Starting offline_analyzer_exp.py...")
+        subprocess.Popen([sys.executable, "offline_analyzer_exp.py"])
         print("  Analyzer launched. System manager done.")
     else:
-        print("  Skipped. Run manually: python3 offline_analyzer.py")
+        print("  Skipped. Run manually: python3 offline_analyzer_exp.py")
 
     print("\n" + "=" * 60)
     print("  SESSION COMPLETE")
