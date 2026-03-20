@@ -348,13 +348,11 @@ class TremorAnalyzerExperimental:
         az = self.data['Az']
         t = self.data['Timestamp'] / 1000.0  # Convert to seconds
 
-        # Remove DC offset per axis (gravity removal)
-        ax_clean = ax - np.mean(ax)
-        ay_clean = ay - np.mean(ay)
-        az_clean = az - np.mean(az)
+        # Calculate resultant vector (magnitude) first
+        accel_mag_raw = np.sqrt(ax**2 + ay**2 + az**2)
 
-        # Calculate resultant vector (magnitude)
-        accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
+        # Remove DC offset from resultant vector
+        accel_mag = accel_mag_raw - np.mean(accel_mag_raw)
 
         # Create tremor bandpass filter (2-8 Hz)
         nyquist = 0.5 * FS
