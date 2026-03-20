@@ -136,38 +136,55 @@ az = data['Az']
 t = data['Timestamp'] / 1000.0  # Convert to seconds
 ```
 
-### **Stage 2.1: DC Offset Removal (Gravity Removal)**
+### **Stage 2.1: Calculate Resultant Vector**
 
 ```python
-# Remove mean = remove gravity
-ax_clean = ax - np.mean(ax)  # Remove DC component
-ay_clean = ay - np.mean(ay)
-az_clean = az - np.mean(az)
-```
-
-**Why This Works:**
-- Gravity is **constant** over time → DC offset
-- Tremor is **time-varying** → AC signal
-- Subtracting the mean removes only the constant component (gravity), leaving oscillations (tremor)
-
-**Example:**
-```
-Ay (raw):     [-1.2, -1.1, -1.3, -1.0, -1.2]  ← DC offset of -1.16
-mean(Ay):     -1.16
-Ay_clean:     [-0.04, +0.06, -0.14, +0.16, -0.04]  ← Only oscillations!
-```
-
-### **Stage 2.2: Calculate Resultant Vector**
-
-```python
-# Vector magnitude
-accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
+# Compute magnitude from raw data (including gravity)
+accel_mag_raw = np.sqrt(ax**2 + ay**2 + az**2)
 ```
 
 **What This Does:**
 - Converts 3 axes (X, Y, Z) to a single scalar value
 - Measures **total acceleration magnitude** regardless of direction
 - Useful for measuring **overall tremor severity**
+
+### **Stage 2.2: DC Offset Removal (Gravity Removal)**
+
+```python
+# Remove mean from resultant vector = remove gravity
+accel_mag = accel_mag_raw - np.mean(accel_mag_raw)
+```
+
+**Why This Order (Magnitude First, Then DC Removal)?**
+
+In our physical setup, a DC motor with eccentric mass shakes the hand. The sensor on
+the index finger experiences hand rotation at the tremor frequency. This rotation causes
+gravity's projection on each axis to **change at the tremor frequency** (2-8 Hz).
+
+**The Problem with Per-Axis DC Removal (Old Approach):**
+```python
+# Old approach - problematic for rotating hand:
+ax_clean = ax - mean(ax)   # mean(ax) assumes gravity is CONSTANT on X
+ay_clean = ay - mean(ay)   # But the hand rotates! Gravity on each axis changes
+az_clean = az - mean(az)   # Subtracting a fixed mean doesn't remove this correctly
+```
+- Gravity on each axis is **not constant** - it oscillates with hand rotation
+- These gravity oscillations are **inside the passband** (2-8 Hz) - the filter cannot remove them
+- Residual **gravity artifacts** contaminate the tremor signal
+
+**Why the New Approach Works:**
+```python
+# New approach - rotation-invariant:
+accel_mag_raw = sqrt(ax² + ay² + az²)   # |g| = 9.8 always, regardless of orientation!
+accel_mag = accel_mag_raw - mean(accel_mag_raw)  # Clean removal
+```
+- **|g| = 9.8 m/s² always**, regardless of sensor orientation
+- The DC component of the magnitude is truly **constant** → mean subtraction removes it cleanly
+- No gravity artifacts leak into the tremor frequency band
+
+**Note:** This approach primarily captures the tremor projection onto the gravity direction.
+For our setup (eccentric mass → hand rotation), this is appropriate because the vibration
+is primarily rotational, and this approach accurately captures the dominant component.
 
 ### **Stage 2.3: Identify Dominant Axis**
 
@@ -542,9 +559,9 @@ Physical acceleration + gravity (9.81 m/s²)
 ```
 CSV with raw data
            ↓
-[Remove DC = remove gravity]  ← ax_clean = ax - mean(ax)
+[Calculate Resultant Vector]  ← mag_raw = √(x² + y² + z²)
            ↓
-[Calculate Resultant Vector]  ← mag = √(x² + y² + z²)
+[Remove DC = remove gravity]  ← mag = mag_raw - mean(mag_raw)
            ↓
 [Identify Dominant Axis]      ← energy = Σ(signal²)
            ↓
