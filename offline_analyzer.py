@@ -153,7 +153,7 @@ class TremorAnalyzerResearch:
 
         # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS ====================
         fig2_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig2_frame, text="Figure 2 - Resultant Vector")
+        self.notebook.add(fig2_frame, text="Figure 2 - Dominant Axis")
 
         self.fig2 = plt.figure(figsize=(15, 4))
         gs2 = GridSpec(1, 3, figure=self.fig2, hspace=0.3, wspace=0.3)
@@ -308,7 +308,7 @@ class TremorAnalyzerResearch:
         return data
 
     def process_tremor_analysis(self):
-        """Main tremor analysis pipeline - Resultant vector only"""
+        """Main tremor analysis pipeline - Independent axis filtering"""
 
         # Extract data
         ax = self.data['Ax']
@@ -316,38 +316,64 @@ class TremorAnalyzerResearch:
         az = self.data['Az']
         t = self.data['Timestamp'] / 1000.0  # Convert to seconds
 
-        # Remove DC offset per axis (gravity removal)
-        ax_clean = ax - np.mean(ax)
-        ay_clean = ay - np.mean(ay)
-        az_clean = az - np.mean(az)
-
-        # Calculate resultant vector (magnitude)
-        accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
-
         # Create single tremor filter (2-8 Hz)
         nyquist = 0.5 * FS
         b_tremor, a_tremor = butter(FILTER_ORDER,
                                     [FREQ_TREMOR_LOW/nyquist, FREQ_TREMOR_HIGH/nyquist],
                                     btype='band')
 
-        # Apply filter to resultant vector
-        result_filtered = filtfilt(b_tremor, a_tremor, accel_mag)
+        # Filter each axis independently (bandpass removes DC inherently)
+        ax_filt = filtfilt(b_tremor, a_tremor, ax)
+        ay_filt = filtfilt(b_tremor, a_tremor, ay)
+        az_filt = filtfilt(b_tremor, a_tremor, az)
 
-        # Calculate PSDs
-        nperseg = min(len(accel_mag), int(FS * WINDOW_SEC))
+        # Resultant from filtered axes (for time-domain metrics only)
+        result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
+
+        # Raw resultant (DC removed) — for metrics only
+        ax_clean = ax - np.mean(ax)
+        ay_clean = ay - np.mean(ay)
+        az_clean = az - np.mean(az)
+        accel_mag = np.sqrt(ax_clean**2 + ay_clean**2 + az_clean**2)
+
+        # PSD on each filtered axis to identify dominant axis
+        nperseg = min(len(ax_filt), int(FS * WINDOW_SEC))
         noverlap = int(nperseg * PSD_OVERLAP)
 
-        # PSD for resultant (raw and filtered)
-        f_psd, psd_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
-        _, psd_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
+        f_psd, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
 
-        # Calculate metrics - peak detection on FILTERED PSD
-        metrics = self.calculate_metrics(accel_mag, result_filtered, f_psd, psd_filt)
+        # Identify dominant axis (highest PSD peak in 2-8 Hz)
+        rest_mask = (f_psd >= FREQ_REST_LOW) & (f_psd <= FREQ_REST_HIGH)
+        axis_psds = {'X': psd_ax, 'Y': psd_ay, 'Z': psd_az}
+        axis_signals = {'X': ax_filt, 'Y': ay_filt, 'Z': az_filt}
+        max_peak = -1
+        dominant_axis_name = 'X'
+        for name, psd in axis_psds.items():
+            peak_val = np.max(psd[rest_mask]) if np.sum(rest_mask) > 0 else 0
+            if peak_val > max_peak:
+                max_peak = peak_val
+                dominant_axis_name = name
 
-        # Visualize everything
+        psd_dominant = axis_psds[dominant_axis_name]
+        dominant_signal = axis_signals[dominant_axis_name]
+
+        # Raw dominant axis (DC-removed) for time-domain display
+        axis_raw = {'X': ax, 'Y': ay, 'Z': az}
+        dominant_raw = axis_raw[dominant_axis_name] - np.mean(axis_raw[dominant_axis_name])
+
+        # Raw PSD for comparison
+        _, psd_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
+
+        # Calculate metrics - resultant for amplitude, dominant PSD for frequency
+        metrics = self.calculate_metrics(accel_mag, result_filtered, f_psd, psd_dominant)
+        metrics['dominant_axis'] = dominant_axis_name
+
+        # Visualize: time-domain plots show dominant axis, not resultant
         self.plot_analysis(
-            t, accel_mag, result_filtered,
-            f_psd, psd_raw, psd_filt,
+            t, dominant_raw, dominant_signal,
+            f_psd, psd_raw, psd_dominant,
             b_tremor, a_tremor, metrics
         )
 
@@ -435,7 +461,7 @@ class TremorAnalyzerResearch:
     def plot_analysis(self, t, result_raw, result_filt,
                      f_psd, psd_raw, psd_filt,
                      b_tremor, a_tremor, metrics):
-        """Plot complete analysis - resultant vector only"""
+        """Plot complete analysis - dominant axis for time-domain, resultant for metrics only"""
 
         # ============================================================
         # FIGURE 1: FILTER CHARACTERISTICS
@@ -493,20 +519,23 @@ class TremorAnalyzerResearch:
         self.ax_bode_phase.grid(True, alpha=0.3)
 
         # ============================================================
-        # FIGURE 2: RESULTANT VECTOR ANALYSIS
+        # FIGURE 2: DOMINANT AXIS WAVEFORM (raw + filtered)
+        # Resultant is used only for metrics, not displayed.
         # ============================================================
 
-        # Raw resultant
+        dom_ax = metrics.get('dominant_axis', '?')
+
+        # Raw dominant axis
         self.ax_result_raw.clear()
         self.ax_result_raw.plot(t, result_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_result_raw.set_title(f'Fig 2.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s^2',
+        self.ax_result_raw.set_title(f'Fig 2.1 - Dominant Axis ({dom_ax}) Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s\u00b2',
                                     fontweight='bold')
-        self.ax_result_raw.set_ylabel('Magnitude (m/s^2)')
+        self.ax_result_raw.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_raw.set_xlabel('Time (s)')
         self.ax_result_raw.grid(True, alpha=0.3)
         self.ax_result_raw.margins(x=0)
 
-        # Filtered resultant
+        # Filtered dominant axis
         self.ax_result_filtered.clear()
         self.ax_result_filtered.plot(t, result_filt, color=COL_FILTERED, linewidth=1.2)
 
@@ -515,22 +544,23 @@ class TremorAnalyzerResearch:
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        self.ax_result_filtered.set_title(f'Fig 2.2 - Resultant Filtered (2-8 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s^2',
+        filt_rms = np.sqrt(np.mean(result_filt**2))
+        self.ax_result_filtered.set_title(f'Fig 2.2 - Dominant Axis ({dom_ax}) Filtered (2-8 Hz) | RMS: {filt_rms:.4f} m/s\u00b2',
                                          fontweight='bold')
-        self.ax_result_filtered.set_ylabel('Magnitude (m/s^2)')
+        self.ax_result_filtered.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_filtered.set_xlabel('Time (s)')
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
 
-        # Overlay comparison
+        # Overlay comparison (dominant axis)
         self.ax_result_overlay.clear()
         self.ax_result_overlay.plot(t, result_raw, color=COL_RAW, linewidth=1,
-                                   alpha=0.5, label='Raw')
+                                   alpha=0.5, label=f'Raw ({dom_ax})')
         self.ax_result_overlay.plot(t, result_filt, color=COL_FILTERED, linewidth=1.5,
-                                   label='Filtered (2-8 Hz)')
+                                   label=f'Filtered ({dom_ax}, 2-8 Hz)')
 
-        self.ax_result_overlay.set_title('Fig 2.3 - Resultant: Raw vs Filtered', fontweight='bold')
-        self.ax_result_overlay.set_ylabel('Magnitude (m/s^2)')
+        self.ax_result_overlay.set_title(f'Fig 2.3 - Dominant Axis ({dom_ax}): Raw vs Filtered', fontweight='bold')
+        self.ax_result_overlay.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_overlay.set_xlabel('Time (s)')
         self.ax_result_overlay.grid(True, alpha=0.3)
         self.ax_result_overlay.margins(x=0)
@@ -563,7 +593,8 @@ class TremorAnalyzerResearch:
         self.ax_psd_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
                                 color='yellow', alpha=0.15, label='Analysis 2-8 Hz')
 
-        self.ax_psd_full.set_title('Fig 3.1 - PSD: Resultant Vector (0-20 Hz)', fontweight='bold')
+        dom_ax_psd = metrics.get('dominant_axis', '?')
+        self.ax_psd_full.set_title(f'Fig 3.1 - PSD: Dominant Axis {dom_ax_psd} (0-20 Hz)', fontweight='bold')
         self.ax_psd_full.set_xlabel('Frequency (Hz)')
         self.ax_psd_full.set_ylabel('Power (dB)')
         self.ax_psd_full.set_xlim(0, 20)
@@ -609,8 +640,10 @@ class TremorAnalyzerResearch:
         status_symbol = "V" if metrics['validation_status'] == "PASS" else "X"
         fail_info = f"  ({metrics['fail_reason']})" if metrics['fail_reason'] else ""
 
+        dom_ax_m = metrics.get('dominant_axis', '?')
         metrics_text = f"""INPUT-OUTPUT VALIDATION
 {'='*40}
+DOMINANT AXIS: {dom_ax_m} (Freq-Domain)
 PWM Frequency:  {metrics['pwm_freq']:.2f} Hz
 PSD Peak Freq:  {metrics['dominant_freq']:.2f} Hz
 Deviation:      {metrics['deviation']:.2f} Hz
@@ -619,7 +652,7 @@ Peak SNR:       {metrics['snr_db']:.1f} dB (threshold: {SNR_THRESHOLD_DB:.0f} dB
 Noise Floor:    {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
 Status:         [{status_symbol}] {metrics['validation_status']}{fail_info}
 
-RESULTANT VECTOR METRICS
+RESULTANT VECTOR METRICS (amplitude only)
 {'='*40}
 RMS Amplitude:  {metrics['accel_rms']:.4f} m/s^2
 Mean Amplitude: {metrics['accel_mean']:.4f} m/s^2
@@ -691,31 +724,32 @@ Filter:         2-8 Hz (Butterworth O4, filtfilt)
                                    str(idx + 1), ha='center', fontsize=7, fontweight='bold',
                                    color='#1565C0')
 
+        dom_ax_zoom = metrics.get('dominant_axis', '?')
         self.ax_zoom_filt.set_title(
-            f'Fig 4.1 - Filtered Zoomed ({zoom_duration:.0f}s) | '
+            f'Fig 4.1 - Dominant Axis ({dom_ax_zoom}) Filtered Zoomed ({zoom_duration:.0f}s) | '
             f'Cycles: {cycle_count} | '
             f'{cycle_count}/{zoom_duration:.0f}s = {measured_freq_zc:.2f} Hz '
             f'(PSD: {dom_freq:.2f} Hz)',
             fontweight='bold', fontsize=9)
-        self.ax_zoom_filt.set_ylabel('Magnitude (m/s²)')
+        self.ax_zoom_filt.set_ylabel('Accel (m/s\u00b2)')
         self.ax_zoom_filt.set_xlabel('Time (s)')
         self.ax_zoom_filt.grid(True, alpha=0.3)
 
-        # Fig 4.2: Zoomed raw vs filtered overlay
+        # Fig 4.2: Zoomed raw vs filtered overlay (dominant axis)
         self.ax_zoom_overlay.clear()
         self.ax_zoom_overlay.plot(t_zoom, raw_zoom, color=COL_RAW, linewidth=1,
-                                  alpha=0.5, label='Raw')
+                                  alpha=0.5, label=f'Raw ({dom_ax_zoom})')
         self.ax_zoom_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
-                                  label='Filtered (2-8 Hz)')
+                                  label=f'Filtered ({dom_ax_zoom}, 2-8 Hz)')
 
         # Mark zero-crossings on overlay too
         for t_cross in crossing_times:
             self.ax_zoom_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
 
         self.ax_zoom_overlay.set_title(
-            f'Fig 4.2 - Raw vs Filtered Zoomed ({zoom_duration:.0f}s)',
+            f'Fig 4.2 - Dominant Axis ({dom_ax_zoom}) Raw vs Filtered Zoomed ({zoom_duration:.0f}s)',
             fontweight='bold', fontsize=9)
-        self.ax_zoom_overlay.set_ylabel('Magnitude (m/s²)')
+        self.ax_zoom_overlay.set_ylabel('Accel (m/s\u00b2)')
         self.ax_zoom_overlay.set_xlabel('Time (s)')
         self.ax_zoom_overlay.grid(True, alpha=0.3)
         self.ax_zoom_overlay.legend(fontsize=8)

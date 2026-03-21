@@ -6,7 +6,7 @@ Based on offline_analyzer.py with the following changes:
     as informational metrics only (no PASS/FAIL judgment).
   - Peak SNR is calculated and Dominant Power Ratio (DPR) is derived from
     peak PSD vs total band power — shows how concentrated the energy is.
-  - Fig 2: Raw and filtered resultant vector (2 broader plots, no overlay).
+  - Fig 2: Raw and filtered dominant axis waveform (2 broader plots, no overlay).
   - Fig 3.3: Enlarged metrics panel with larger font.
   - Fig 4: Zoomed filtered signal for a 5-second window (first half of a
     10-second block taken from the middle of the recording).
@@ -166,7 +166,7 @@ class TremorAnalyzerExperimental:
 
         # ==================== FIGURE 2: RESULTANT VECTOR ANALYSIS (2 broader plots) ====================
         fig2_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig2_frame, text="Figure 2 - Resultant Vector")
+        self.notebook.add(fig2_frame, text="Figure 2 - Dominant Axis")
 
         self.fig2 = plt.figure(figsize=(15, 4))
         gs2 = GridSpec(1, 2, figure=self.fig2, hspace=0.3, wspace=0.3)
@@ -368,7 +368,7 @@ class TremorAnalyzerExperimental:
         # Step 3: Resultant vector from filtered axes (for time-domain metrics)
         result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
 
-        # Raw resultant for display (DC removed for visualization)
+        # Raw resultant (DC removed) — used only for raw PSD comparison
         result_raw = np.sqrt(ax**2 + ay**2 + az**2)
         result_raw = result_raw - np.mean(result_raw)
 
@@ -399,9 +399,14 @@ class TremorAnalyzerExperimental:
         # Raw PSD for comparison display (from DC-removed raw resultant)
         _, psd_raw = welch(result_raw, FS, nperseg=nperseg, noverlap=noverlap)
 
-        # Store dominant axis info for FFT computation
+        # Store dominant axis info for FFT and plotting
         self._dominant_axis_signal = dominant_signal
         self._dominant_axis_name = dominant_axis_name
+
+        # Raw dominant axis (DC-removed) for time-domain display
+        axis_raw = {'X': ax, 'Y': ay, 'Z': az}
+        dominant_raw = axis_raw[dominant_axis_name] - np.mean(axis_raw[dominant_axis_name])
+        self._dominant_axis_raw = dominant_raw
 
         # Step 6: Calculate metrics
         # Time-domain metrics from resultant, freq-domain from dominant axis PSD
@@ -410,8 +415,9 @@ class TremorAnalyzerExperimental:
                                          dominant_axis_name)
 
         # Visualize everything
+        # Time-domain plots use dominant axis (raw + filtered), not resultant
         self.plot_analysis(
-            t, result_raw, result_filtered,
+            t, dominant_raw, dominant_signal,
             f_psd, psd_raw, psd_dominant,
             b_tremor, a_tremor, metrics
         )
@@ -483,10 +489,12 @@ class TremorAnalyzerExperimental:
 
         return metrics
 
-    def plot_analysis(self, t, result_raw, result_filt,
+    def plot_analysis(self, t, dom_raw, dom_filt,
                      f_psd, psd_raw, psd_filt,
                      b_tremor, a_tremor, metrics):
-        """Plot complete analysis - 6 figure tabs, no pass/fail coloring"""
+        """Plot complete analysis - 6 figure tabs, no pass/fail coloring.
+        Time-domain plots show dominant axis (dom_raw, dom_filt).
+        Resultant is used only for metrics, not displayed."""
 
         # ============================================================
         # FIGURE 1: FILTER CHARACTERISTICS
@@ -536,28 +544,32 @@ class TremorAnalyzerExperimental:
         self.ax_bode_phase.grid(True, alpha=0.3)
 
         # ============================================================
-        # FIGURE 2: RESULTANT VECTOR ANALYSIS
+        # FIGURE 2: DOMINANT AXIS WAVEFORM (raw + filtered)
+        # Resultant is used only for metrics, not displayed.
         # ============================================================
 
+        dom_ax = metrics.get('dominant_axis', '?')
+
         self.ax_result_raw.clear()
-        self.ax_result_raw.plot(t, result_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_result_raw.set_title(f'Fig 2.1 - Resultant Vector Raw | RMS: {np.sqrt(np.mean(result_raw**2)):.4f} m/s^2',
+        self.ax_result_raw.plot(t, dom_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
+        self.ax_result_raw.set_title(f'Fig 2.1 - Dominant Axis ({dom_ax}) Raw | RMS: {np.sqrt(np.mean(dom_raw**2)):.4f} m/s\u00b2',
                                     fontweight='bold')
-        self.ax_result_raw.set_ylabel('Magnitude (m/s^2)')
+        self.ax_result_raw.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_raw.set_xlabel('Time (s)')
         self.ax_result_raw.grid(True, alpha=0.3)
         self.ax_result_raw.margins(x=0)
 
         self.ax_result_filtered.clear()
-        self.ax_result_filtered.plot(t, result_filt, color=COL_FILTERED, linewidth=1.2)
+        self.ax_result_filtered.plot(t, dom_filt, color=COL_FILTERED, linewidth=1.2)
 
-        envelope_result = np.abs(hilbert(result_filt))
+        envelope_result = np.abs(hilbert(dom_filt))
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        self.ax_result_filtered.set_title(f'Fig 2.2 - Resultant Filtered (2-8 Hz) | RMS: {metrics["accel_rms"]:.4f} m/s^2',
+        filt_rms = np.sqrt(np.mean(dom_filt**2))
+        self.ax_result_filtered.set_title(f'Fig 2.2 - Dominant Axis ({dom_ax}) Filtered (2-8 Hz) | RMS: {filt_rms:.4f} m/s\u00b2',
                                          fontweight='bold')
-        self.ax_result_filtered.set_ylabel('Magnitude (m/s^2)')
+        self.ax_result_filtered.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_filtered.set_xlabel('Time (s)')
         self.ax_result_filtered.grid(True, alpha=0.3)
         self.ax_result_filtered.margins(x=0)
@@ -668,7 +680,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
 
         # Fig 4: first 5s window (A)
         self._plot_zoomed_window(
-            t, result_raw, result_filt, metrics,
+            t, dom_raw, dom_filt, metrics,
             ax_filt=self.ax_zoom_a_filt,
             ax_overlay=self.ax_zoom_a_overlay,
             zoom_start=zoom_a_start,
@@ -679,7 +691,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
 
         # Fig 5: next consecutive 5s window (B)
         self._plot_zoomed_window(
-            t, result_raw, result_filt, metrics,
+            t, dom_raw, dom_filt, metrics,
             ax_filt=self.ax_zoom_b_filt,
             ax_overlay=self.ax_zoom_b_overlay,
             zoom_start=zoom_b_start,
@@ -691,7 +703,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         # ============================================================
         # FIGURE 6: FFT OVER FULL 120s
         # ============================================================
-        self._plot_fft_full(result_filt, result_raw, metrics)
+        self._plot_fft_full(metrics)
 
         # Draw all canvases
         for canvas in self.canvases:
@@ -723,13 +735,17 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
     # ------------------------------------------------------------------
     # Helper: plot a 5-second zoomed window (reused for Fig 4 and Fig 5)
     # ------------------------------------------------------------------
-    def _plot_zoomed_window(self, t, result_raw, result_filt, metrics,
+    def _plot_zoomed_window(self, t, dom_raw, dom_filt, metrics,
                             ax_filt, ax_overlay,
                             zoom_start, zoom_end,
                             fig_prefix, window_label):
         """Plot a 5-second zoomed window with Hilbert envelope and cycle markers.
 
+        Displays dominant axis waveform (raw + filtered), not resultant.
+
         Args:
+            dom_raw:  raw dominant axis signal (DC-removed).
+            dom_filt: filtered dominant axis signal.
             zoom_start: start time of the window (seconds).
             zoom_end:   end time of the window (seconds).
             fig_prefix: '4' or '5' for title numbering.
@@ -737,8 +753,8 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         """
         zoom_mask = (t >= zoom_start) & (t <= zoom_end)
         t_zoom = t[zoom_mask]
-        filt_zoom = result_filt[zoom_mask]
-        raw_zoom = result_raw[zoom_mask]
+        filt_zoom = dom_filt[zoom_mask]
+        raw_zoom = dom_raw[zoom_mask]
 
         dom_freq = metrics['dominant_freq']
 
@@ -777,32 +793,33 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
                          str(idx + 1), ha='center', fontsize=7, fontweight='bold',
                          color='#1565C0')
 
+        dom_ax = metrics.get('dominant_axis', '?')
         ax_filt.set_title(
-            f'Fig {fig_prefix}.1 - Filtered Zoomed {window_label} '
+            f'Fig {fig_prefix}.1 - Dominant Axis ({dom_ax}) Filtered Zoomed {window_label} '
             f'[{zoom_start:.1f}s-{zoom_end:.1f}s] | '
             f'Cycles: {cycle_count} | '
             f'{cycle_count}/{actual_duration:.1f}s = {measured_freq_zc:.2f} Hz '
             f'(PSD: {dom_freq:.2f} Hz)',
             fontweight='bold', fontsize=9)
-        ax_filt.set_ylabel('Magnitude (m/s\u00b2)')
+        ax_filt.set_ylabel('Accel (m/s\u00b2)')
         ax_filt.set_xlabel('Time (s)')
         ax_filt.grid(True, alpha=0.3)
 
-        # -- Subplot 2: Raw vs filtered overlay --
+        # -- Subplot 2: Raw vs filtered overlay (dominant axis) --
         ax_overlay.clear()
         ax_overlay.plot(t_zoom, raw_zoom, color=COL_RAW, linewidth=1,
-                        alpha=0.5, label='Raw')
+                        alpha=0.5, label=f'Raw ({dom_ax})')
         ax_overlay.plot(t_zoom, filt_zoom, color=COL_FILTERED, linewidth=1.5,
-                        label='Filtered (2-8 Hz)')
+                        label=f'Filtered ({dom_ax}, 2-8 Hz)')
 
         for t_cross in crossing_times:
             ax_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
 
         ax_overlay.set_title(
-            f'Fig {fig_prefix}.2 - Raw vs Filtered {window_label} '
+            f'Fig {fig_prefix}.2 - Dominant Axis ({dom_ax}) Raw vs Filtered {window_label} '
             f'[{zoom_start:.1f}s-{zoom_end:.1f}s]',
             fontweight='bold', fontsize=9)
-        ax_overlay.set_ylabel('Magnitude (m/s\u00b2)')
+        ax_overlay.set_ylabel('Accel (m/s\u00b2)')
         ax_overlay.set_xlabel('Time (s)')
         ax_overlay.grid(True, alpha=0.3)
         ax_overlay.legend(fontsize=8)
@@ -810,7 +827,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
     # ------------------------------------------------------------------
     # Helper: FFT over full recording
     # ------------------------------------------------------------------
-    def _plot_fft_full(self, result_filt, result_raw, metrics):
+    def _plot_fft_full(self, metrics):
         """Compute and plot FFT magnitude spectrum of the dominant axis.
 
         Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
