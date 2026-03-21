@@ -365,66 +365,85 @@ class TremorAnalyzerExperimental:
         ay_filt = filtfilt(b_tremor, a_tremor, ay)
         az_filt = filtfilt(b_tremor, a_tremor, az)
 
-        # Step 3: Resultant vector from filtered axes
+        # Step 3: Resultant vector from filtered axes (for time-domain metrics)
         result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
 
         # Raw resultant for display (DC removed for visualization)
         result_raw = np.sqrt(ax**2 + ay**2 + az**2)
         result_raw = result_raw - np.mean(result_raw)
 
-        # Step 4: PSD on individual filtered axes (avoids frequency doubling
-        # that would occur from the nonlinear sqrt in the resultant vector)
+        # Step 4: PSD on each filtered axis independently
         nperseg = min(len(ax_filt), int(FS * WINDOW_SEC))
         noverlap = int(nperseg * PSD_OVERLAP)
 
         f_psd, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
         _, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
         _, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
-        psd_filt = psd_ax + psd_ay + psd_az  # Sum of per-axis PSDs
 
-        # Raw PSD for comparison display
+        # Step 5: Identify dominant axis — whichever has the absolute max
+        # PSD peak in the 2-8 Hz band
+        rest_mask = (f_psd >= FREQ_REST_LOW) & (f_psd <= FREQ_REST_HIGH)
+        axis_psds = {'X': psd_ax, 'Y': psd_ay, 'Z': psd_az}
+        axis_signals = {'X': ax_filt, 'Y': ay_filt, 'Z': az_filt}
+        max_peak = -1
+        dominant_axis_name = 'X'
+        for name, psd in axis_psds.items():
+            peak_val = np.max(psd[rest_mask]) if np.sum(rest_mask) > 0 else 0
+            if peak_val > max_peak:
+                max_peak = peak_val
+                dominant_axis_name = name
+
+        psd_dominant = axis_psds[dominant_axis_name]
+        dominant_signal = axis_signals[dominant_axis_name]
+
+        # Raw PSD for comparison display (from DC-removed raw resultant)
         _, psd_raw = welch(result_raw, FS, nperseg=nperseg, noverlap=noverlap)
 
-        # Store filtered axes for per-axis FFT computation
-        self._filtered_axes = (ax_filt, ay_filt, az_filt)
+        # Store dominant axis info for FFT computation
+        self._dominant_axis_signal = dominant_signal
+        self._dominant_axis_name = dominant_axis_name
 
-        # Step 5: Calculate metrics
-        metrics = self.calculate_metrics(result_raw, result_filtered, f_psd, psd_filt)
+        # Step 6: Calculate metrics
+        # Time-domain metrics from resultant, freq-domain from dominant axis PSD
+        metrics = self.calculate_metrics(result_raw, result_filtered,
+                                         f_psd, psd_dominant,
+                                         dominant_axis_name)
 
         # Visualize everything
         self.plot_analysis(
             t, result_raw, result_filtered,
-            f_psd, psd_raw, psd_filt,
+            f_psd, psd_raw, psd_dominant,
             b_tremor, a_tremor, metrics
         )
 
-    def calculate_metrics(self, accel_raw, accel_filt, freq, psd_filt):
+    def calculate_metrics(self, accel_raw, accel_filt, freq, psd_dominant,
+                          dominant_axis_name='?'):
         """Calculate tremor metrics - INFORMATIONAL ONLY (no pass/fail).
-        Reports frequency deviation, peak SNR, and dominant power ratio."""
+        Time-domain metrics (RMS, max) from resultant vector (accel_filt).
+        Freq-domain metrics (SNR, DPR, dominant freq) from dominant axis PSD."""
         metrics = {}
+        metrics['dominant_axis'] = dominant_axis_name
 
-        # Resultant vector features
+        # Resultant vector features (time-domain, captures full 3D energy)
         metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))
         metrics['accel_mean'] = np.mean(np.abs(accel_filt))
         metrics['accel_max'] = np.max(np.abs(accel_filt))
 
-        # Total power in rest tremor band (2-8 Hz) from filtered PSD
+        # Frequency-domain metrics from dominant axis PSD
         rest_mask = (freq >= FREQ_REST_LOW) & (freq <= FREQ_REST_HIGH)
-        metrics['total_power'] = np.trapz(psd_filt[rest_mask], freq[rest_mask])
+        metrics['total_power'] = np.trapz(psd_dominant[rest_mask], freq[rest_mask])
 
-        # Dominant frequency and peak spectral density (within 2-8 Hz on filtered PSD)
+        # Dominant frequency and peak spectral density (within 2-8 Hz)
         if np.sum(rest_mask) > 0:
-            band_psd = psd_filt[rest_mask]
+            band_psd = psd_dominant[rest_mask]
             band_freq = freq[rest_mask]
             peak_idx = np.argmax(band_psd)
             metrics['dominant_freq'] = band_freq[peak_idx]
             metrics['peak_power_density'] = band_psd[peak_idx]
 
-            # SNR: peak PSD vs MPU6050 sensor noise floor
-            # 3-axis sum → noise floor is 3x per-axis noise PSD
-            sensor_noise_floor = 3 * MPU6050_NOISE_PSD
-            metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / sensor_noise_floor)
-            metrics['noise_floor'] = sensor_noise_floor
+            # SNR: peak PSD vs MPU6050 sensor noise floor (single axis)
+            metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / MPU6050_NOISE_PSD)
+            metrics['noise_floor'] = MPU6050_NOISE_PSD
 
             # Dominant Power Ratio (DPR): integrated power in a small window
             # around the peak (+/-1 bin = +/-0.25 Hz), divided by total band
@@ -565,7 +584,8 @@ class TremorAnalyzerExperimental:
         self.ax_psd_full.axvspan(FREQ_REST_LOW, FREQ_REST_HIGH,
                                 color='yellow', alpha=0.15, label='Analysis 2-8 Hz')
 
-        self.ax_psd_full.set_title('Fig 3.1 - PSD: Resultant Vector (0-20 Hz)', fontweight='bold')
+        dom_ax = metrics.get('dominant_axis', '?')
+        self.ax_psd_full.set_title(f'Fig 3.1 - PSD: Dominant Axis {dom_ax} (0-20 Hz)', fontweight='bold')
         self.ax_psd_full.set_xlabel('Frequency (Hz)')
         self.ax_psd_full.set_ylabel('Power (dB)')
         self.ax_psd_full.set_xlim(0, 20)
@@ -595,7 +615,7 @@ class TremorAnalyzerExperimental:
                                 color='red', markersize=10,
                                 label=f"Peak: {metrics['dominant_freq']:.2f} Hz")
 
-        self.ax_psd_zoom.set_title('Fig 3.2 - PSD Zoomed: Filtered (1-12 Hz)', fontweight='bold')
+        self.ax_psd_zoom.set_title(f'Fig 3.2 - PSD Zoomed: Dominant Axis {dom_ax} (1-12 Hz)', fontweight='bold')
         self.ax_psd_zoom.set_xlabel('Frequency (Hz)')
         self.ax_psd_zoom.set_ylabel('Power (dB)')
         self.ax_psd_zoom.set_xlim(1, 12)
@@ -606,27 +626,22 @@ class TremorAnalyzerExperimental:
         self.ax_metrics.clear()
         self.ax_metrics.axis('off')
 
-        metrics_text = f"""MEASUREMENT INFO (No Pass/Fail)
-{'='*44}
-PWM Frequency:       {metrics['pwm_freq']:.2f} Hz
-PSD Peak Freq:       {metrics['dominant_freq']:.2f} Hz
-Deviation:           {metrics['deviation']:.2f} Hz
-Reference:           +/-{FREQ_TOLERANCE_HZ:.2f} Hz
-Peak SNR:            {metrics['snr_db']:.1f} dB
-Noise Floor:         {metrics['noise_floor']:.6f} (m/s^2)^2/Hz
-Dom. Power Ratio:    {metrics['dominant_power_ratio']:.1%}
-
-RESULTANT VECTOR METRICS
+        metrics_text = f"""RESULTANT VECTOR (Time-Domain)
 {'='*44}
 RMS Amplitude:       {metrics['accel_rms']:.4f} m/s^2
 Mean Amplitude:      {metrics['accel_mean']:.4f} m/s^2
 Max Amplitude:       {metrics['accel_max']:.4f} m/s^2
 
-REST TREMOR ANALYSIS (2-8 Hz)
+DOMINANT AXIS: {metrics['dominant_axis']} (Freq-Domain)
 {'='*44}
+PWM Frequency:       {metrics['pwm_freq']:.2f} Hz
 Dominant Freq:       {metrics['dominant_freq']:.2f} Hz
+Deviation:           {metrics['deviation']:.2f} Hz
 Peak PSD:            {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
 Band Power:          {metrics['total_power']:.6f} (m/s^2)^2
+Peak SNR:            {metrics['snr_db']:.1f} dB
+Noise Floor:         {metrics['noise_floor']:.2e} (m/s^2)^2/Hz
+Dom. Power Ratio:    {metrics['dominant_power_ratio']:.1%}
 Filter:              2-8 Hz (Butterworth O4, filtfilt)
 """
 
@@ -796,20 +811,17 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
     # Helper: FFT over full recording
     # ------------------------------------------------------------------
     def _plot_fft_full(self, result_filt, result_raw, metrics):
-        """Compute and plot FFT magnitude spectrum over the full recording.
+        """Compute and plot FFT magnitude spectrum of the dominant axis.
 
-        Uses per-axis FFT (RSS) to avoid frequency doubling from nonlinear sqrt.
         Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
         """
-        ax_filt, ay_filt, az_filt = self._filtered_axes
-        N = len(ax_filt)
+        dominant_signal = self._dominant_axis_signal
+        dom_ax = self._dominant_axis_name
+        N = len(dominant_signal)
 
-        # Per-axis FFT, then RSS (root sum of squares) for total magnitude
+        # FFT of the dominant filtered axis only
         fft_freqs = np.fft.rfftfreq(N, d=1.0/FS)
-        fft_mag_ax = np.abs(np.fft.rfft(ax_filt)) / N
-        fft_mag_ay = np.abs(np.fft.rfft(ay_filt)) / N
-        fft_mag_az = np.abs(np.fft.rfft(az_filt)) / N
-        fft_magnitude = np.sqrt(fft_mag_ax**2 + fft_mag_ay**2 + fft_mag_az**2)
+        fft_magnitude = np.abs(np.fft.rfft(dominant_signal)) / N
 
         # Find peak in the 2-8 Hz band on the filtered FFT
         band_mask = (fft_freqs >= FREQ_REST_LOW) & (fft_freqs <= FREQ_REST_HIGH)
@@ -841,7 +853,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
                                 label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
 
         self.ax_fft_zoom.set_title(
-            f'Fig 6 - FFT (1-12 Hz, Full {N/FS:.0f}s) | Peak: {fft_peak_freq:.2f} Hz',
+            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz, {N/FS:.0f}s) | Peak: {fft_peak_freq:.2f} Hz',
             fontweight='bold')
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')

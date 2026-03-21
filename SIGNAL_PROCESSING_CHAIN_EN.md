@@ -215,7 +215,7 @@ metrics['accel_rms'] = np.sqrt(np.mean(result_filtered**2))
 - **International clinical standard** for tremor severity measurement
 - Computed from the filtered resultant → captures 100% of 3D tremor energy
 
-### **Stage 2.4: PSD Analysis on Independent Filtered Axes**
+### **Stage 2.4: PSD Analysis & Dominant Axis Selection**
 
 ```python
 nperseg = min(len(ax_filt), int(FS * 4))  # 4-second window
@@ -226,8 +226,15 @@ f, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
 _, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
 _, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
 
-# Sum of per-axis PSDs = total spectral power
-psd_total = psd_ax + psd_ay + psd_az
+# Identify dominant axis: whichever holds the absolute max PSD peak in 2-8 Hz
+rest_mask = (f >= 2.0) & (f <= 8.0)
+peaks = {
+    'X': max(psd_ax[rest_mask]),
+    'Y': max(psd_ay[rest_mask]),
+    'Z': max(psd_az[rest_mask]),
+}
+dominant_axis = max(peaks, key=peaks.get)  # e.g. 'Y'
+psd_dominant = {'X': psd_ax, 'Y': psd_ay, 'Z': psd_az}[dominant_axis]
 ```
 
 **Why PSD on Individual Axes (Not on Resultant)?**
@@ -235,8 +242,14 @@ psd_total = psd_ax + psd_ay + psd_az
 The resultant vector `R = sqrt(x² + y² + z²)` is a **nonlinear** operation.
 Taking the PSD of R would introduce **frequency doubling artifacts** — spurious
 harmonics at 2× the true tremor frequency. By computing PSD on each linear
-(filtered) axis and summing, we get the correct total spectral power without
-any mathematical distortion.
+(filtered) axis, we get a clean spectrum without mathematical distortion.
+
+**Why Select One Dominant Axis?**
+
+The axis with the strongest PSD peak carries the clearest tremor signal.
+Using its PSD exclusively for frequency-domain metrics (SNR, DPR, dominant freq)
+ensures these metrics are not diluted by noise from weaker axes. The PSD plot
+and FFT plot also show the dominant axis only for clarity.
 
 **Welch Parameters:**
 
@@ -249,23 +262,27 @@ any mathematical distortion.
 
 ### **Stage 2.5: Calculate Metrics**
 
+**Time-domain metrics** are computed from the **resultant vector** (captures full 3D energy):
 ```python
-# Dominant frequency: highest PSD peak in 2-8 Hz band
-rest_mask = (freq >= 2.0) & (freq <= 8.0)
-band_psd = psd_total[rest_mask]
-peak_idx = np.argmax(band_psd)
+metrics['accel_rms'] = sqrt(mean(result_filtered**2))   # RMS
+metrics['accel_max'] = max(abs(result_filtered))         # Max amplitude
+```
+
+**Frequency-domain metrics** are computed from the **dominant axis PSD** only:
+```python
+# Dominant frequency: highest PSD peak in 2-8 Hz on dominant axis
+band_psd = psd_dominant[rest_mask]
+peak_idx = argmax(band_psd)
 metrics['dominant_freq'] = freq[rest_mask][peak_idx]
 
-# SNR: peak PSD vs MPU6050 sensor noise floor
+# SNR: peak PSD vs MPU6050 sensor noise floor (single axis)
 # MPU6050 datasheet: 400 µg/√Hz noise density
 # Per-axis noise PSD = (400e-6 * 9.81)² (m/s²)²/Hz
-# 3-axis sum → sensor_noise_floor = 3 × per-axis noise PSD
-sensor_noise_floor = 3 * MPU6050_NOISE_PSD
-metrics['snr_db'] = 10 * log10(peak_psd / sensor_noise_floor)
+metrics['snr_db'] = 10 * log10(peak_psd / MPU6050_NOISE_PSD)
 
 # DPR: integrated power around peak (±1 bin) / total band power
-peak_power = trapz(psd[peak ± 1 bin])
-total_power = trapz(psd[2-8 Hz])
+peak_power = trapz(psd_dominant[peak ± 1 bin])
+total_power = trapz(psd_dominant[2-8 Hz])
 metrics['dominant_power_ratio'] = peak_power / total_power
 ```
 
@@ -519,16 +536,19 @@ CSV with raw data (Ax, Ay, Az including gravity)
 [RMS Amplitude]               ← √(mean(R²))
   - Total tremor intensity
            ↓
-[PSD on Individual Axes]      ← Welch on Ax_f, Ay_f, Az_f separately
-  - Sum of per-axis PSDs       ← Avoids frequency doubling
+[PSD on Each Axis]            ← Welch on Ax_f, Ay_f, Az_f separately
   - Window: 4 sec, Overlap: 50%
   - Resolution: 0.25 Hz
            ↓
+[Identify Dominant Axis]      ← Axis with absolute max PSD peak in 2-8 Hz
+           ↓
 [Calculate Metrics]
-  - Dominant frequency (Hz)
+  Time-domain (from Resultant):
   - RMS amplitude (m/s²)
-  - Peak SNR vs sensor noise floor (dB)
   - Max amplitude (m/s²)
+  Freq-domain (from Dominant Axis):
+  - Dominant frequency (Hz)
+  - Peak SNR vs sensor noise floor (dB)
   - DPR (dominant power ratio)
 ```
 

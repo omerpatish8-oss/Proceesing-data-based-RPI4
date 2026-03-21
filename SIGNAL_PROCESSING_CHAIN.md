@@ -215,7 +215,7 @@ metrics['accel_rms'] = np.sqrt(np.mean(result_filtered**2))
 - **סטנדרט קליני בינלאומי** למדידת חומרת רעד
 - מחושב מהוקטור התוצאתי המסונן → לוכד 100% מאנרגיית הרעד התלת-ממדית
 
-### **שלב 2.4: ניתוח PSD על צירים מסוננים בנפרד**
+### **שלב 2.4: ניתוח PSD ובחירת ציר דומיננטי**
 
 ```python
 nperseg = min(len(ax_filt), int(FS * 4))  # חלון של 4 שניות
@@ -226,16 +226,30 @@ f, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
 _, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
 _, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
 
-# סכום PSD לפי ציר = הספק ספקטרלי כולל
-psd_total = psd_ax + psd_ay + psd_az
+# זיהוי ציר דומיננטי: הציר עם פיק PSD המוחלט הגבוה ביותר בפס 2-8 Hz
+rest_mask = (f >= 2.0) & (f <= 8.0)
+peaks = {
+    'X': max(psd_ax[rest_mask]),
+    'Y': max(psd_ay[rest_mask]),
+    'Z': max(psd_az[rest_mask]),
+}
+dominant_axis = max(peaks, key=peaks.get)  # לדוגמה: 'Y'
+psd_dominant = {'X': psd_ax, 'Y': psd_ay, 'Z': psd_az}[dominant_axis]
 ```
 
 **למה PSD על צירים בודדים (ולא על הוקטור התוצאתי)?**
 
 הוקטור התוצאתי `R = sqrt(x² + y² + z²)` הוא פעולה **לא-ליניארית**.
 חישוב PSD של R ייצור **ארטיפקטים של הכפלת תדר** — הרמוניות מזויפות
-בתדר 2× מתדר הרעד האמיתי. על ידי חישוב PSD על כל ציר ליניארי
-(מסונן) וסיכום, מקבלים הספק ספקטרלי כולל נכון ללא עיוות מתמטי.
+בתדר 2× מתדר הרעד האמיתי. חישוב PSD על כל ציר ליניארי (מסונן)
+נותן ספקטרום נקי ללא עיוות מתמטי.
+
+**למה לבחור ציר דומיננטי אחד?**
+
+הציר עם פיק PSD החזק ביותר נושא את אות הרעד הבהיר ביותר.
+שימוש ב-PSD שלו בלבד למדדי תחום התדר (SNR, DPR, תדר דומיננטי)
+מבטיח שמדדים אלו לא מדוללים על ידי רעש מצירים חלשים יותר.
+גם גרף ה-PSD וגרף ה-FFT מציגים את הציר הדומיננטי בלבד לבהירות.
 
 **פרמטרי Welch:**
 
@@ -248,33 +262,28 @@ psd_total = psd_ax + psd_ay + psd_az
 
 ### **שלב 2.5: חישוב מדדים**
 
+**מדדי תחום הזמן** מחושבים מה**וקטור התוצאתי** (לוכד 100% אנרגיה תלת-ממדית):
 ```python
-# תדר דומיננטי: פיק PSD הגבוה ביותר בפס 2-8 Hz
-rest_mask = (freq >= 2.0) & (freq <= 8.0)
-band_psd = psd_total[rest_mask]
-peak_idx = np.argmax(band_psd)
-metrics['dominant_freq'] = freq[rest_mask][peak_idx]
-
-# SNR: פיק PSD מול רצפת רעש של חיישן MPU6050
-# Datasheet: 400 µg/√Hz צפיפות רעש
-# PSD רעש לכל ציר = (400e-6 * 9.81)² (m/s²)²/Hz
-# סכום 3 צירים → sensor_noise_floor = 3 × PSD רעש לציר
-sensor_noise_floor = 3 * MPU6050_NOISE_PSD
-metrics['snr_db'] = 10 * log10(peak_psd / sensor_noise_floor)
-
-# DPR: הספק אינטגרלי סביב הפיק (±1 bin) / הספק כולל בפס
-peak_power = trapz(psd[peak ± 1 bin])
-total_power = trapz(psd[2-8 Hz])
-metrics['dominant_power_ratio'] = peak_power / total_power
+metrics['accel_rms'] = sqrt(mean(result_filtered**2))   # RMS
+metrics['accel_max'] = max(abs(result_filtered))         # משרעת מקסימלית
 ```
 
-metrics['power_rest'] = np.sum(psd[rest_mask])      # כוח ב-3-7 Hz
-metrics['power_ess'] = np.sum(psd[ess_mask])        # כוח ב-6-12 Hz
+**מדדי תחום התדר** מחושבים מה**ציר הדומיננטי** בלבד:
+```python
+# תדר דומיננטי: פיק PSD הגבוה ביותר בפס 2-8 Hz בציר הדומיננטי
+band_psd = psd_dominant[rest_mask]
+peak_idx = argmax(band_psd)
+metrics['dominant_freq'] = freq[rest_mask][peak_idx]
 
-# תדר דומיננטי
-tremor_mask = (freq >= 3) & (freq <= 12)
-peak_idx = np.argmax(psd[tremor_mask])
-metrics['dominant_freq'] = freq[tremor_mask][peak_idx]
+# SNR: פיק PSD מול רצפת רעש של חיישן MPU6050 (ציר בודד)
+# Datasheet: 400 µg/√Hz צפיפות רעש
+# PSD רעש לציר = (400e-6 * 9.81)² (m/s²)²/Hz
+metrics['snr_db'] = 10 * log10(peak_psd / MPU6050_NOISE_PSD)
+
+# DPR: הספק אינטגרלי סביב הפיק (±1 bin) / הספק כולל בפס
+peak_power = trapz(psd_dominant[peak ± 1 bin])
+total_power = trapz(psd_dominant[2-8 Hz])
+metrics['dominant_power_ratio'] = peak_power / total_power
 ```
 
 #### **📊 הסבר מפורט של המדדים הקליניים:**
@@ -495,16 +504,19 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 [חישוב RMS]               ← √(mean(R²))
   - עוצמת רעד כוללת
            ↓
-[PSD על צירים בודדים]     ← Welch על Ax_f, Ay_f, Az_f בנפרד
-  - סכום PSD לפי ציר       ← מונע הכפלת תדר
+[PSD על כל ציר]            ← Welch על Ax_f, Ay_f, Az_f בנפרד
   - Window: 4 sec, Overlap: 50%
   - Resolution: 0.25 Hz
            ↓
+[זיהוי ציר דומיננטי]      ← הציר עם פיק PSD המוחלט הגבוה ביותר בפס 2-8 Hz
+           ↓
 [חישוב מדדים]
-  - תדר דומיננטי (Hz)
+  תחום זמן (מוקטור תוצאתי):
   - משרעת RMS (m/s²)
-  - SNR פיק מול רצפת רעש חיישן (dB)
   - משרעת מקסימלית (m/s²)
+  תחום תדר (מציר דומיננטי):
+  - תדר דומיננטי (Hz)
+  - SNR פיק מול רצפת רעש חיישן (dB)
   - DPR (יחס הספק דומיננטי)
 ```
 
