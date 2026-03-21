@@ -55,10 +55,6 @@ COL_INFO = '#3498DB'        # Blue - Informational (replaces pass/fail colors)
 # Zoomed window duration for Fig 4 and Fig 5
 ZOOM_DURATION_SEC = 5.0     # Each zoomed window is 5 seconds
 
-# MPU6050 accelerometer sensor noise floor
-# Datasheet: 400 µg/√Hz noise spectral density (at ±2g range)
-MPU6050_NOISE_DENSITY = 400e-6 * 9.81   # Convert to m/s²/√Hz
-MPU6050_NOISE_PSD = MPU6050_NOISE_DENSITY**2  # Per-axis PSD noise floor (m/s²)²/Hz
 
 
 class TremorAnalyzerExperimental:
@@ -425,15 +421,14 @@ class TremorAnalyzerExperimental:
     def calculate_metrics(self, accel_raw, accel_filt, freq, psd_dominant,
                           dominant_axis_name='?'):
         """Calculate tremor metrics - INFORMATIONAL ONLY (no pass/fail).
-        Time-domain metrics (RMS, max) from resultant vector (accel_filt).
-        Freq-domain metrics (SNR, DPR, dominant freq) from dominant axis PSD."""
+        Time-domain: RMS of resultant vector (accel_filt = sqrt(ax²+ay²+az²)).
+        Freq-domain: dominant freq, DPR from dominant axis PSD."""
         metrics = {}
         metrics['dominant_axis'] = dominant_axis_name
 
-        # Resultant vector features (time-domain, captures full 3D energy)
+        # RMS of resultant vector: sqrt(1/N * Σ(Ri²))
+        # where Ri = sqrt(ax_filt_i² + ay_filt_i² + az_filt_i²)
         metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))
-        metrics['accel_mean'] = np.mean(np.abs(accel_filt))
-        metrics['accel_max'] = np.max(np.abs(accel_filt))
 
         # Frequency-domain metrics from dominant axis PSD
         rest_mask = (freq >= FREQ_REST_LOW) & (freq <= FREQ_REST_HIGH)
@@ -447,18 +442,12 @@ class TremorAnalyzerExperimental:
             metrics['dominant_freq'] = band_freq[peak_idx]
             metrics['peak_power_density'] = band_psd[peak_idx]
 
-            # SNR: peak PSD vs MPU6050 sensor noise floor (single axis)
-            metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / MPU6050_NOISE_PSD)
-            metrics['noise_floor'] = MPU6050_NOISE_PSD
-
             # Dominant Power Ratio (DPR): integrated power in a small window
             # around the peak (+/-1 bin = +/-0.25 Hz), divided by total band
             # power. Both use trapz for consistent area-under-curve integration.
-            # DPR = trapz(PSD[peak-1..peak+1]) / trapz(PSD[2-8 Hz])
             pk_lo = max(0, peak_idx - 1)
             pk_hi = min(len(band_psd), peak_idx + 2)  # exclusive end
             peak_power = np.trapz(band_psd[pk_lo:pk_hi], band_freq[pk_lo:pk_hi])
-            # total_power already computed above via trapz over the full band
             metrics['dominant_power_ratio'] = (
                 peak_power / metrics['total_power']
                 if metrics['total_power'] > 0 else 0.0
@@ -467,8 +456,6 @@ class TremorAnalyzerExperimental:
         else:
             metrics['dominant_freq'] = 0
             metrics['peak_power_density'] = 0
-            metrics['snr_db'] = 0.0
-            metrics['noise_floor'] = 0.0
             metrics['dominant_power_ratio'] = 0.0
 
         # Frequency deviation from PWM (informational, no pass/fail)
@@ -480,7 +467,7 @@ class TremorAnalyzerExperimental:
 
         # Update UI labels - informational only
         self.lbl_measured_freq.config(
-            text=f"Measured: {measured_freq:.2f} Hz | SNR: {metrics['snr_db']:.1f} dB"
+            text=f"Measured: {measured_freq:.2f} Hz | Deviation: {deviation:.2f} Hz"
         )
         self.lbl_validation.config(
             text=f"Deviation: {deviation:.2f} Hz | DPR: {metrics['dominant_power_ratio']:.1%}",
@@ -566,8 +553,7 @@ class TremorAnalyzerExperimental:
         self.ax_result_filtered.plot(t, envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
         self.ax_result_filtered.plot(t, -envelope_result, '--', color=COL_FILTERED, alpha=0.4, linewidth=0.8)
 
-        filt_rms = np.sqrt(np.mean(dom_filt**2))
-        self.ax_result_filtered.set_title(f'Fig 2.2 - Dominant Axis ({dom_ax}) Filtered (2-8 Hz) | RMS: {filt_rms:.4f} m/s\u00b2',
+        self.ax_result_filtered.set_title(f'Fig 2.2 - Dominant Axis ({dom_ax}) Filtered (2-8 Hz)',
                                          fontweight='bold')
         self.ax_result_filtered.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_filtered.set_xlabel('Time (s)')
@@ -641,8 +627,6 @@ class TremorAnalyzerExperimental:
         metrics_text = f"""RESULTANT VECTOR (Time-Domain)
 {'='*44}
 RMS Amplitude:       {metrics['accel_rms']:.4f} m/s^2
-Mean Amplitude:      {metrics['accel_mean']:.4f} m/s^2
-Max Amplitude:       {metrics['accel_max']:.4f} m/s^2
 
 DOMINANT AXIS: {metrics['dominant_axis']} (Freq-Domain)
 {'='*44}
@@ -651,8 +635,6 @@ Dominant Freq:       {metrics['dominant_freq']:.2f} Hz
 Deviation:           {metrics['deviation']:.2f} Hz
 Peak PSD:            {metrics['peak_power_density']:.6f} (m/s^2)^2/Hz
 Band Power:          {metrics['total_power']:.6f} (m/s^2)^2
-Peak SNR:            {metrics['snr_db']:.1f} dB
-Noise Floor:         {metrics['noise_floor']:.2e} (m/s^2)^2/Hz
 Dom. Power Ratio:    {metrics['dominant_power_ratio']:.1%}
 Filter:              2-8 Hz (Butterworth O4, filtfilt)
 """
@@ -718,13 +700,9 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         print(f"  PSD Peak Freq:     {metrics['dominant_freq']:.2f} Hz")
         print(f"  Deviation:         {metrics['deviation']:.2f} Hz")
         print(f"  Reference:         +/-{FREQ_TOLERANCE_HZ:.2f} Hz")
-        print(f"  Peak SNR:          {metrics['snr_db']:.1f} dB")
-        print(f"  Noise Floor:       {metrics['noise_floor']:.6f} (m/s^2)^2/Hz")
         print(f"  Dom. Power Ratio:  {metrics['dominant_power_ratio']:.1%}")
         print(f"\nRESULTANT VECTOR METRICS:")
         print(f"  RMS Amplitude:     {metrics['accel_rms']:.4f} m/s^2")
-        print(f"  Mean Amplitude:    {metrics['accel_mean']:.4f} m/s^2")
-        print(f"  Max Amplitude:     {metrics['accel_max']:.4f} m/s^2")
         print(f"\nREST TREMOR ANALYSIS (2-8 Hz):")
         print(f"  Filter:            2-8 Hz (Butterworth Order 4, filtfilt)")
         print(f"  Dominant Freq:     {metrics['dominant_freq']:.2f} Hz")
@@ -795,8 +773,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
 
         dom_ax = metrics.get('dominant_axis', '?')
         ax_filt.set_title(
-            f'Fig {fig_prefix}.1 - Dominant Axis ({dom_ax}) Filtered Zoomed {window_label} '
-            f'[{zoom_start:.1f}s-{zoom_end:.1f}s] | '
+            f'Fig {fig_prefix}.1 - Dominant Axis ({dom_ax}) Filtered Zoomed {window_label} | '
             f'Cycles: {cycle_count} | '
             f'{cycle_count}/{actual_duration:.1f}s = {measured_freq_zc:.2f} Hz '
             f'(PSD: {dom_freq:.2f} Hz)',
@@ -816,8 +793,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
             ax_overlay.axvline(x=t_cross, color='#2196F3', linewidth=0.5, alpha=0.3)
 
         ax_overlay.set_title(
-            f'Fig {fig_prefix}.2 - Dominant Axis ({dom_ax}) Raw vs Filtered {window_label} '
-            f'[{zoom_start:.1f}s-{zoom_end:.1f}s]',
+            f'Fig {fig_prefix}.2 - Dominant Axis ({dom_ax}) Raw vs Filtered {window_label}',
             fontweight='bold', fontsize=9)
         ax_overlay.set_ylabel('Accel (m/s\u00b2)')
         ax_overlay.set_xlabel('Time (s)')
