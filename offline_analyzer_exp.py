@@ -241,7 +241,7 @@ class TremorAnalyzerExperimental:
 
         # ==================== FIGURE 6: FFT OVER FULL 120s (single full-width plot) ====================
         fig6_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig6_frame, text="Figure 6 - FFT (Full 120s)")
+        self.notebook.add(fig6_frame, text="Figure 6 - FFT")
 
         self.fig6 = plt.figure(figsize=(15, 4))
         gs6 = GridSpec(1, 1, figure=self.fig6)
@@ -846,7 +846,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
                                 label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
 
         self.ax_fft_zoom.set_title(
-            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz, {N/FS:.0f}s) | Peak: {fft_peak_freq:.2f} Hz',
+            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz) | Peak: {fft_peak_freq:.2f} Hz',
             fontweight='bold')
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
