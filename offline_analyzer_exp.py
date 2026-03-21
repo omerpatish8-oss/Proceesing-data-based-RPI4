@@ -241,7 +241,7 @@ class TremorAnalyzerExperimental:
 
         # ==================== FIGURE 6: FFT OVER FULL 120s (single full-width plot) ====================
         fig6_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig6_frame, text="Figure 6 - FFT")
+        self.notebook.add(fig6_frame, text="Figure 6 - FFT (40-80s)")
 
         self.fig6 = plt.figure(figsize=(15, 4))
         gs6 = GridSpec(1, 1, figure=self.fig6)
@@ -808,8 +808,12 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
 
         Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
         """
-        dominant_signal = self._dominant_axis_signal
         dom_ax = self._dominant_axis_name
+
+        # Use only the 40-80s window for a cleaner FFT view
+        start_sample = int(40 * FS)
+        end_sample = int(80 * FS)
+        dominant_signal = self._dominant_axis_signal[start_sample:end_sample]
         N = len(dominant_signal)
 
         # FFT of the dominant filtered axis only
@@ -846,7 +850,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
                                 label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
 
         self.ax_fft_zoom.set_title(
-            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz) | Peak: {fft_peak_freq:.2f} Hz',
+            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz, 40-80s window) | Peak: {fft_peak_freq:.2f} Hz',
             fontweight='bold')
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
