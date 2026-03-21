@@ -55,6 +55,11 @@ COL_INFO = '#3498DB'        # Blue - Informational (replaces pass/fail colors)
 # Zoomed window duration for Fig 4 and Fig 5
 ZOOM_DURATION_SEC = 5.0     # Each zoomed window is 5 seconds
 
+# MPU6050 accelerometer sensor noise floor
+# Datasheet: 400 µg/√Hz noise spectral density (at ±2g range)
+MPU6050_NOISE_DENSITY = 400e-6 * 9.81   # Convert to m/s²/√Hz
+MPU6050_NOISE_PSD = MPU6050_NOISE_DENSITY**2  # Per-axis PSD noise floor (m/s²)²/Hz
+
 
 class TremorAnalyzerExperimental:
     def __init__(self, root):
@@ -341,41 +346,54 @@ class TremorAnalyzerExperimental:
         return data
 
     def process_tremor_analysis(self):
-        """Main tremor analysis pipeline - Resultant vector only"""
+        """Main tremor analysis pipeline - Independent axis filtering"""
 
         ax = self.data['Ax']
         ay = self.data['Ay']
         az = self.data['Az']
         t = self.data['Timestamp'] / 1000.0  # Convert to seconds
 
-        # Calculate resultant vector (magnitude) first
-        accel_mag_raw = np.sqrt(ax**2 + ay**2 + az**2)
-
-        # Remove DC offset from resultant vector
-        accel_mag = accel_mag_raw - np.mean(accel_mag_raw)
-
-        # Create tremor bandpass filter (2-8 Hz)
+        # Step 1: Create tremor bandpass filter (2-8 Hz)
         nyquist = 0.5 * FS
         b_tremor, a_tremor = butter(FILTER_ORDER,
                                     [FREQ_TREMOR_LOW/nyquist, FREQ_TREMOR_HIGH/nyquist],
                                     btype='band')
 
-        # Apply filter to resultant vector
-        result_filtered = filtfilt(b_tremor, a_tremor, accel_mag)
+        # Step 2: Filter each axis independently
+        # Bandpass inherently removes DC (gravity) and high-freq noise in one step
+        ax_filt = filtfilt(b_tremor, a_tremor, ax)
+        ay_filt = filtfilt(b_tremor, a_tremor, ay)
+        az_filt = filtfilt(b_tremor, a_tremor, az)
 
-        # Calculate PSDs
-        nperseg = min(len(accel_mag), int(FS * WINDOW_SEC))
+        # Step 3: Resultant vector from filtered axes
+        result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
+
+        # Raw resultant for display (DC removed for visualization)
+        result_raw = np.sqrt(ax**2 + ay**2 + az**2)
+        result_raw = result_raw - np.mean(result_raw)
+
+        # Step 4: PSD on individual filtered axes (avoids frequency doubling
+        # that would occur from the nonlinear sqrt in the resultant vector)
+        nperseg = min(len(ax_filt), int(FS * WINDOW_SEC))
         noverlap = int(nperseg * PSD_OVERLAP)
 
-        f_psd, psd_raw = welch(accel_mag, FS, nperseg=nperseg, noverlap=noverlap)
-        _, psd_filt = welch(result_filtered, FS, nperseg=nperseg, noverlap=noverlap)
+        f_psd, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
+        _, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
+        psd_filt = psd_ax + psd_ay + psd_az  # Sum of per-axis PSDs
 
-        # Calculate metrics - informational only, no pass/fail
-        metrics = self.calculate_metrics(accel_mag, result_filtered, f_psd, psd_filt)
+        # Raw PSD for comparison display
+        _, psd_raw = welch(result_raw, FS, nperseg=nperseg, noverlap=noverlap)
+
+        # Store filtered axes for per-axis FFT computation
+        self._filtered_axes = (ax_filt, ay_filt, az_filt)
+
+        # Step 5: Calculate metrics
+        metrics = self.calculate_metrics(result_raw, result_filtered, f_psd, psd_filt)
 
         # Visualize everything
         self.plot_analysis(
-            t, accel_mag, result_filtered,
+            t, result_raw, result_filtered,
             f_psd, psd_raw, psd_filt,
             b_tremor, a_tremor, metrics
         )
@@ -402,17 +420,11 @@ class TremorAnalyzerExperimental:
             metrics['dominant_freq'] = band_freq[peak_idx]
             metrics['peak_power_density'] = band_psd[peak_idx]
 
-            # In-band SNR: peak PSD vs mean of remaining bins (excluding peak +/-1)
-            noise_mask = np.ones(len(band_psd), dtype=bool)
-            for i in range(max(0, peak_idx - 1), min(len(band_psd), peak_idx + 2)):
-                noise_mask[i] = False
-            if np.sum(noise_mask) > 0:
-                noise_mean = np.mean(band_psd[noise_mask])
-                metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / max(noise_mean, 1e-12))
-                metrics['noise_floor'] = noise_mean
-            else:
-                metrics['snr_db'] = 0.0
-                metrics['noise_floor'] = 0.0
+            # SNR: peak PSD vs MPU6050 sensor noise floor
+            # 3-axis sum → noise floor is 3x per-axis noise PSD
+            sensor_noise_floor = 3 * MPU6050_NOISE_PSD
+            metrics['snr_db'] = 10.0 * np.log10(band_psd[peak_idx] / sensor_noise_floor)
+            metrics['noise_floor'] = sensor_noise_floor
 
             # Dominant Power Ratio (DPR): integrated power in a small window
             # around the peak (+/-1 bin = +/-0.25 Hz), divided by total band
@@ -786,14 +798,18 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
     def _plot_fft_full(self, result_filt, result_raw, metrics):
         """Compute and plot FFT magnitude spectrum over the full recording.
 
+        Uses per-axis FFT (RSS) to avoid frequency doubling from nonlinear sqrt.
         Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
         """
-        N = len(result_filt)
+        ax_filt, ay_filt, az_filt = self._filtered_axes
+        N = len(ax_filt)
 
-        # Compute FFT of filtered signal
-        fft_vals = np.fft.rfft(result_filt)
+        # Per-axis FFT, then RSS (root sum of squares) for total magnitude
         fft_freqs = np.fft.rfftfreq(N, d=1.0/FS)
-        fft_magnitude = np.abs(fft_vals) / N  # Normalize by sample count
+        fft_mag_ax = np.abs(np.fft.rfft(ax_filt)) / N
+        fft_mag_ay = np.abs(np.fft.rfft(ay_filt)) / N
+        fft_mag_az = np.abs(np.fft.rfft(az_filt)) / N
+        fft_magnitude = np.sqrt(fft_mag_ax**2 + fft_mag_ay**2 + fft_mag_az**2)
 
         # Find peak in the 2-8 Hz band on the filtered FFT
         band_mask = (fft_freqs >= FREQ_REST_LOW) & (fft_freqs <= FREQ_REST_HIGH)

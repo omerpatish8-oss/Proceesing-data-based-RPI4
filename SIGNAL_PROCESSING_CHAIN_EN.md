@@ -136,154 +136,107 @@ az = data['Az']
 t = data['Timestamp'] / 1000.0  # Convert to seconds
 ```
 
-### **Stage 2.1: Calculate Resultant Vector**
+### **Stage 2.1: Independent Axis Filtering (DC Removal + Noise Reduction)**
 
 ```python
-# Compute magnitude from raw data (including gravity)
-accel_mag_raw = np.sqrt(ax**2 + ay**2 + az**2)
+# Create Butterworth bandpass filter (2-8 Hz)
+b_tremor, a_tremor = butter(4, [2.0/nyquist, 8.0/nyquist], btype='band')
+
+# Apply to each axis independently via zero-phase filtering
+ax_filt = filtfilt(b_tremor, a_tremor, ax)
+ay_filt = filtfilt(b_tremor, a_tremor, ay)
+az_filt = filtfilt(b_tremor, a_tremor, az)
 ```
 
-**What This Does:**
-- Converts 3 axes (X, Y, Z) to a single scalar value
-- Measures **total acceleration magnitude** regardless of direction
-- Useful for measuring **overall tremor severity**
+**Why Filter First, Per-Axis?**
 
-### **Stage 2.2: DC Offset Removal (Gravity Removal)**
+This single step accomplishes three things simultaneously:
+1. **Removes DC (gravity):** The bandpass has no gain at 0 Hz, so the constant gravity
+   component on each axis is automatically eliminated — no mean subtraction needed.
+2. **Removes high-frequency noise:** Everything above 8 Hz (motor vibration, sensor noise) is attenuated.
+3. **Handles wrist rotation correctly:** Unlike mean subtraction (which assumes gravity is
+   constant on each axis), the bandpass correctly handles the case where gravity's projection
+   shifts between axes due to hand rotation — because those slow orientation changes are
+   below 2 Hz and are rejected by the filter.
 
-```python
-# Remove mean from resultant vector = remove gravity
-accel_mag = accel_mag_raw - np.mean(accel_mag_raw)
-```
-
-**Why This Order (Magnitude First, Then DC Removal)?**
-
-In our physical setup, a DC motor with eccentric mass shakes the hand. The sensor on
-the index finger experiences hand rotation at the tremor frequency. This rotation causes
-gravity's projection on each axis to **change at the tremor frequency** (2-8 Hz).
-
-**The Problem with Per-Axis DC Removal (Old Approach):**
-```python
-# Old approach - problematic for rotating hand:
-ax_clean = ax - mean(ax)   # mean(ax) assumes gravity is CONSTANT on X
-ay_clean = ay - mean(ay)   # But the hand rotates! Gravity on each axis changes
-az_clean = az - mean(az)   # Subtracting a fixed mean doesn't remove this correctly
-```
-- Gravity on each axis is **not constant** - it oscillates with hand rotation
-- These gravity oscillations are **inside the passband** (2-8 Hz) - the filter cannot remove them
-- Residual **gravity artifacts** contaminate the tremor signal
-
-**Why the New Approach Works:**
-```python
-# New approach - rotation-invariant:
-accel_mag_raw = sqrt(ax² + ay² + az²)   # |g| = 9.8 always, regardless of orientation!
-accel_mag = accel_mag_raw - mean(accel_mag_raw)  # Clean removal
-```
-- **|g| = 9.8 m/s² always**, regardless of sensor orientation
-- The DC component of the magnitude is truly **constant** → mean subtraction removes it cleanly
-- No gravity artifacts leak into the tremor frequency band
-
-**Note:** This approach primarily captures the tremor projection onto the gravity direction.
-For our setup (eccentric mass → hand rotation), this is appropriate because the vibration
-is primarily rotational, and this approach accurately captures the dominant component.
-
-### **Stage 2.3: Identify Dominant Axis**
-
-```python
-# Calculate energy in each axis
-energy_x = np.sum(ax_clean**2)  # Sum of squares = signal energy
-energy_y = np.sum(ay_clean**2)
-energy_z = np.sum(az_clean**2)
-
-# Select axis with highest energy
-max_axis = max({'X': energy_x, 'Y': energy_y, 'Z': energy_z})
-```
-
-**Why Important:**
-- Identifies which **direction has the strongest tremor**
-- Usually Y-axis (anterior-posterior) is dominant in hand tremor
-
-### **Stage 2.4: Build Filters - Butterworth Filters**
-
-#### **Parameters:**
-```python
-FS = 100.0              # Sampling frequency (Hz)
-FILTER_ORDER = 4        # Filter order (Butterworth)
-```
-
-#### **3 Bandpass Filters:**
-
-**1️⃣ Combined Tremor Filter:**
-```python
-b_tremor, a_tremor = butter(4, [3/nyquist, 12/nyquist], btype='band')
-```
-- **Type:** Butterworth Order 4
-- **Passband:** **3-12 Hz**
-- **Lower cutoff (-3dB):** 3 Hz
-- **Upper cutoff (-3dB):** 12 Hz
-- **Purpose:** Filter entire tremor range (Rest + Essential)
-
-**2️⃣ Rest Tremor Filter:**
-```python
-b_rest, a_rest = butter(4, [3/nyquist, 7/nyquist], btype='band')
-```
-- **Type:** Butterworth Order 4
-- **Passband:** **3-7 Hz**
-- **Purpose:** Isolate Parkinsonian rest tremor
-
-**3️⃣ Essential Tremor Filter:**
-```python
-b_ess, a_ess = butter(4, [6/nyquist, 12/nyquist], btype='band')
-```
-- **Type:** Butterworth Order 4
-- **Passband:** **6-12 Hz**
-- **Purpose:** Isolate postural/essential tremor
-
-#### **Butterworth Order 4 Characteristics:**
+**Butterworth Order 4 + filtfilt:**
 
 | Property | Value |
 |----------|-------|
-| **Roll-off (slope)** | 24 dB/octave (80 dB/decade) |
-| **Passband Ripple** | 0 dB (completely flat!) |
-| **Phase** | Non-linear, but... |
-| **Zero-phase?** | Yes! Thanks to `filtfilt()` |
+| **Passband** | 2-8 Hz (extended from clinical 3-7 Hz to preserve band edges) |
+| **Roll-off** | 48 dB/octave (effective, doubled by filtfilt) |
+| **Passband Ripple** | 0 dB (maximally flat) |
+| **Phase distortion** | Zero (filtfilt = forward-backward filtering) |
 
-### **Stage 2.5: Apply Filters - Zero-Phase Filtering**
-
-```python
-# Filter dominant axis
-axis_filtered = filtfilt(b_tremor, a_tremor, dominant_axis)
-axis_rest = filtfilt(b_rest, a_rest, dominant_axis)
-axis_ess = filtfilt(b_ess, a_ess, dominant_axis)
-
-# Filter resultant vector
-result_filtered = filtfilt(b_tremor, a_tremor, accel_mag)
-result_rest = filtfilt(b_rest, a_rest, accel_mag)
-result_ess = filtfilt(b_ess, a_ess, accel_mag)
-```
-
-**Why `filtfilt()` and not `filter()`?**
-
-`filtfilt()` = **Zero-Phase Filtering**
-- **Filters forward and backward** (Forward-Backward)
-- **No phase distortion** (No phase shift)
-- **Preserves timing of features** (events stay at same time)
-- **Important for medical analysis!** (doesn't change timing of tremor)
-
-**How It Works:**
+**How filtfilt works:**
 ```
 Signal → [Filter Forward] → [Reverse] → [Filter Backward] → Result
 ```
-**Result:** 48 dB/octave slope (doubled!), zero phase shift
+- Doubles the roll-off slope (24 → 48 dB/octave)
+- Cancels all phase distortion → events stay at correct time
+- Critical for medical analysis where timing matters
 
-### **Stage 2.6: PSD Analysis - Power Spectral Density**
+### **Stage 2.2: Resultant Vector from Filtered Axes**
 
 ```python
-nperseg = min(len(accel_mag), int(FS * 4))  # 4-second window
-noverlap = int(nperseg * 0.5)                # 50% overlap
-
-# Calculate PSD using Welch's method
-f, psd = welch(signal, FS, nperseg=nperseg, noverlap=noverlap)
+# Combine filtered axes into a single 1D scalar wave
+result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
 ```
+
+**What This Does:**
+- Converts 3 filtered axes into a single **magnitude** value at each sample
+- Captures **100% of the true kinetic energy** of the tremor
+- Direction-independent: measures overall tremor severity regardless of sensor orientation
+
+**Why After Filtering (Not Before)?**
+
+The `sqrt(x² + y² + z²)` operation is **nonlinear**. If applied to unfiltered data
+(which contains a large DC gravity offset), the nonlinearity distorts the signal
+and creates spurious frequency content. By filtering first:
+- Each axis is a clean, zero-mean tremor oscillation
+- The magnitude faithfully represents the 3D tremor envelope
+- No gravity-induced artifacts contaminate the result
+
+### **Stage 2.3: RMS Amplitude (Total Tremor Intensity)**
+
+```python
+# Root Mean Square of the filtered resultant vector
+metrics['accel_rms'] = np.sqrt(np.mean(result_filtered**2))
+```
+
+**Step by step:**
+1. `squared = result_filtered ** 2` — Square each sample
+2. `mean_squared = mean(squared)` — Average all squared values
+3. `rms = sqrt(mean_squared)` — Take the square root
+
+**Why RMS?**
+- RMS is proportional to the **total kinetic energy** of the tremor
+- Always positive (unlike mean, which cancels out for symmetric oscillations)
+- **International clinical standard** for tremor severity measurement
+- Computed from the filtered resultant → captures 100% of 3D tremor energy
+
+### **Stage 2.4: PSD Analysis on Independent Filtered Axes**
+
+```python
+nperseg = min(len(ax_filt), int(FS * 4))  # 4-second window
+noverlap = int(nperseg * 0.5)              # 50% overlap
+
+# Welch PSD on each filtered axis independently
+f, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
+_, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
+_, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
+
+# Sum of per-axis PSDs = total spectral power
+psd_total = psd_ax + psd_ay + psd_az
+```
+
+**Why PSD on Individual Axes (Not on Resultant)?**
+
+The resultant vector `R = sqrt(x² + y² + z²)` is a **nonlinear** operation.
+Taking the PSD of R would introduce **frequency doubling artifacts** — spurious
+harmonics at 2× the true tremor frequency. By computing PSD on each linear
+(filtered) axis and summing, we get the correct total spectral power without
+any mathematical distortion.
 
 **Welch Parameters:**
 
@@ -294,31 +247,26 @@ f, psd = welch(signal, FS, nperseg=nperseg, noverlap=noverlap)
 | **Frequency resolution** | 0.25 Hz | Frequency detection accuracy |
 | **Window type** | Hann (default) | Reduces spectral leakage |
 
-**Why Welch's Method:**
-- Divides signal into small windows
-- Computes FFT for each window
-- Averages the results
-- **Reduces noise**, improves reliability
-
-### **Stage 2.7: Calculate Clinical Metrics**
+### **Stage 2.5: Calculate Metrics**
 
 ```python
-# Features from Paper 1 (MDPI)
-metrics['accel_mean'] = np.mean(accel_filt)              # Mean
-metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))  # RMS
-metrics['accel_max'] = np.max(np.abs(accel_filt))       # Maximum
+# Dominant frequency: highest PSD peak in 2-8 Hz band
+rest_mask = (freq >= 2.0) & (freq <= 8.0)
+band_psd = psd_total[rest_mask]
+peak_idx = np.argmax(band_psd)
+metrics['dominant_freq'] = freq[rest_mask][peak_idx]
 
-# Power in frequency bands
-rest_mask = (freq >= 3) & (freq <= 7)
-ess_mask = (freq >= 6) & (freq <= 12)
+# SNR: peak PSD vs MPU6050 sensor noise floor
+# MPU6050 datasheet: 400 µg/√Hz noise density
+# Per-axis noise PSD = (400e-6 * 9.81)² (m/s²)²/Hz
+# 3-axis sum → sensor_noise_floor = 3 × per-axis noise PSD
+sensor_noise_floor = 3 * MPU6050_NOISE_PSD
+metrics['snr_db'] = 10 * log10(peak_psd / sensor_noise_floor)
 
-metrics['power_rest'] = np.sum(psd[rest_mask])      # Power at 3-7 Hz
-metrics['power_ess'] = np.sum(psd[ess_mask])        # Power at 6-12 Hz
-
-# Dominant frequency
-tremor_mask = (freq >= 3) & (freq <= 12)
-peak_idx = np.argmax(psd[tremor_mask])
-metrics['dominant_freq'] = freq[tremor_mask][peak_idx]
+# DPR: integrated power around peak (±1 bin) / total band power
+peak_power = trapz(psd[peak ± 1 bin])
+total_power = trapz(psd[2-8 Hz])
+metrics['dominant_power_ratio'] = peak_power / total_power
 ```
 
 #### **📊 Detailed Clinical Metrics Explanation:**
@@ -557,34 +505,31 @@ Physical acceleration + gravity (9.81 m/s²)
 
 ### **Stage 2: Offline Analyzer (Software)**
 ```
-CSV with raw data
+CSV with raw data (Ax, Ay, Az including gravity)
            ↓
-[Calculate Resultant Vector]  ← mag_raw = √(x² + y² + z²)
+[Bandpass Filter Each Axis]   ← filtfilt(2-8 Hz) on Ax, Ay, Az independently
+  - Removes DC (gravity) automatically
+  - Removes high-freq noise
+  - Handles wrist rotation correctly
            ↓
-[Remove DC = remove gravity]  ← mag = mag_raw - mean(mag_raw)
+[Resultant Vector]            ← R = √(Ax_f² + Ay_f² + Az_f²)
+  - From FILTERED axes
+  - Captures 100% kinetic energy
            ↓
-[Identify Dominant Axis]      ← energy = Σ(signal²)
+[RMS Amplitude]               ← √(mean(R²))
+  - Total tremor intensity
            ↓
-[Butterworth Bandpass Filters]
-  - Combined: 3-12 Hz (Order 4)
-  - Rest: 3-7 Hz (Order 4)
-  - Essential: 6-12 Hz (Order 4)
-           ↓
-[Zero-Phase Filtering]     ← filtfilt() - forward-backward
-           ↓
-[PSD Analysis (Welch)]
-  - Window: 4 sec
-  - Overlap: 50%
+[PSD on Individual Axes]      ← Welch on Ax_f, Ay_f, Az_f separately
+  - Sum of per-axis PSDs       ← Avoids frequency doubling
+  - Window: 4 sec, Overlap: 50%
   - Resolution: 0.25 Hz
            ↓
-[Calculate Clinical Metrics]
-  - Mean, RMS, Max
-  - Power in bands
-  - Dominant frequency
-           ↓
-[Automatic Classification]
-  - Rest / Essential / Mixed
-  - Confidence level
+[Calculate Metrics]
+  - Dominant frequency (Hz)
+  - RMS amplitude (m/s²)
+  - Peak SNR vs sensor noise floor (dB)
+  - Max amplitude (m/s²)
+  - DPR (dominant power ratio)
 ```
 
 ---

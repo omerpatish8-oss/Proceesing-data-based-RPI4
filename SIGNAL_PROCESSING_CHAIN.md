@@ -136,154 +136,106 @@ az = data['Az']
 t = data['Timestamp'] / 1000.0  # המרה לשניות
 ```
 
-### **שלב 2.1: חישוב Resultant Vector (וקטור תוצאתי)**
+### **שלב 2.1: סינון עצמאי לכל ציר (הסרת DC + רעש)**
 
 ```python
-# חישוב מגניטודה מנתונים גולמיים (כולל כבידה)
-accel_mag_raw = np.sqrt(ax**2 + ay**2 + az**2)
+# בניית פילטר Butterworth bandpass (2-8 Hz)
+b_tremor, a_tremor = butter(4, [2.0/nyquist, 8.0/nyquist], btype='band')
+
+# סינון כל ציר בנפרד באמצעות zero-phase filtering
+ax_filt = filtfilt(b_tremor, a_tremor, ax)
+ay_filt = filtfilt(b_tremor, a_tremor, ay)
+az_filt = filtfilt(b_tremor, a_tremor, az)
 ```
 
-**מה זה עושה:**
-- ממיר 3 צירים (X, Y, Z) לערך סקלרי אחד
-- מודד את **גודל התאוצה הכולל** ללא קשר לכיוון
-- שימושי למדידת **חומרת רעד כוללת**
+**למה לסנן קודם, לכל ציר בנפרד?**
 
-### **שלב 2.2: הסרת DC Offset (Gravity Removal)**
+שלב אחד זה מבצע שלושה דברים בו זמנית:
+1. **מסיר DC (כבידה):** ל-bandpass אין הגבר ב-0 Hz, כך שרכיב הכבידה הקבוע
+   על כל ציר מוסר אוטומטית - ללא צורך בחיסור ממוצע.
+2. **מסיר רעש גבוה:** כל מה שמעל 8 Hz (רעידות מכניות, רעש חיישן) מוחלש.
+3. **מטפל נכון בסיבוב פרק כף היד:** בניגוד לחיסור ממוצע (שמניח שכבידה
+   קבועה על כל ציר), ה-bandpass מטפל נכון במקרה שבו הטלת הכבידה זזה
+   בין צירים עקב סיבוב היד - כי שינויי כיוון איטיים הם מתחת ל-2 Hz
+   ונדחים על ידי הפילטר.
 
-```python
-# הסרת הממוצע מהוקטור התוצאתי = הסרת כוח הכבידה
-accel_mag = accel_mag_raw - np.mean(accel_mag_raw)
-```
-
-**למה הסדר הזה (מגניטודה קודם, DC אח"כ)?**
-
-במערכת הפיזית שלנו, מנוע DC עם מסה אקסצנטרית מרעיד את היד. החיישן על האצבע
-חווה סיבוב של כף היד בתדר הרעד. סיבוב זה גורם להטלת הכבידה על הצירים
-**להשתנות בתדר הרעד עצמו** (2-8 Hz).
-
-**הבעיה עם הסרת DC לפי ציר (הגישה הישנה):**
-```python
-# ❌ גישה ישנה - בעייתית עבור יד מסתובבת:
-ax_clean = ax - mean(ax)   ← mean(ax) מניח שכבידה קבועה על X
-ay_clean = ay - mean(ay)   ← אבל היד מסתובבת! הכבידה על כל ציר משתנה
-az_clean = az - mean(az)   ← חיסור ממוצע קבוע לא מסיר את זה נכון
-```
-- הכבידה על כל ציר **אינה קבועה** - היא מתנדנדת עם סיבוב היד
-- תנודות הכבידה הן **בתוך הפסבנד** (2-8 Hz) - הפילטר לא יכול להסיר אותן
-- נשארים **ארטיפקטים של כבידה** שמזהמים את אות הרעד
-
-**למה הגישה החדשה עובדת:**
-```python
-# ✅ גישה חדשה - עמידה בסיבוב:
-accel_mag_raw = sqrt(ax² + ay² + az²)   ← |g| = 9.8 תמיד, לא משנה הכיוון!
-accel_mag = accel_mag_raw - mean(accel_mag_raw)  ← הסרה נקייה
-```
-- **|g| = 9.8 m/s² תמיד**, ללא קשר לאוריינטציית החיישן
-- רכיב ה-DC של המגניטודה הוא באמת **קבוע** → חיסור ממוצע מסיר אותו בצורה נקייה
-- אין ארטיפקטים של כבידה בתוך פס התדר
-
-**הערה:** הגישה הזו שומרת בעיקר על הטלת הרעד על כיוון הכבידה.
-במערכת שלנו (מסה אקסצנטרית → סיבוב יד), זה מתאים כי הרעד הוא בעיקר סיבובי,
-והגישה הזו לוכדת בדיוק את הרכיב הדומיננטי.
-
-### **שלב 2.3: זיהוי ציר דומיננטי**
-
-```python
-# חישוב אנרגיה בכל ציר
-energy_x = np.sum(ax_clean**2)  # סכום ריבועים = אנרגיית אות
-energy_y = np.sum(ay_clean**2)
-energy_z = np.sum(az_clean**2)
-
-# בחירת הציר עם האנרגיה הגבוהה ביותר
-max_axis = max({'X': energy_x, 'Y': energy_y, 'Z': energy_z})
-```
-
-**למה חשוב:**
-- מזהה באיזה **כיוון הרעד החזק ביותר**
-- בדרך כלל Y-axis (קדימה-אחורה) דומיננטי ברעד ידיים
-
-### **שלב 2.4: בניית מסננים - Butterworth Filters**
-
-#### **פרמטרים:**
-```python
-FS = 100.0              # תדר דגימה (Hz)
-FILTER_ORDER = 4        # סדר הפילטר (Butterworth)
-```
-
-#### **3 מסננים מסוג Bandpass (מעביר פס):**
-
-**1️⃣ מסנן משולב (Combined Tremor Filter):**
-```python
-b_tremor, a_tremor = butter(4, [3/nyquist, 12/nyquist], btype='band')
-```
-- **סוג:** Butterworth Order 4
-- **רוחב פס:** **3-12 Hz**
-- **תדר חיתוך תחתון (-3dB):** 3 Hz
-- **תדר חיתוך עליון (-3dB):** 12 Hz
-- **מטרה:** סינון כל טווח הרעד (Rest + Essential)
-
-**2️⃣ מסנן רעד מנוחה (Rest Tremor Filter):**
-```python
-b_rest, a_rest = butter(4, [3/nyquist, 7/nyquist], btype='band')
-```
-- **סוג:** Butterworth Order 4
-- **רוחב פס:** **3-7 Hz**
-- **מטרה:** בידוד רעד פרקינסון (Rest tremor)
-
-**3️⃣ מסנן רעד אסנציאלי (Essential Tremor Filter):**
-```python
-b_ess, a_ess = butter(4, [6/nyquist, 12/nyquist], btype='band')
-```
-- **סוג:** Butterworth Order 4
-- **רוחב פס:** **6-12 Hz**
-- **מטרה:** בידוד רעד פוסטורלי (Essential tremor)
-
-#### **מאפייני Butterworth Order 4:**
+**Butterworth Order 4 + filtfilt:**
 
 | מאפיין | ערך |
 |--------|-----|
-| **Roll-off (שיפוע)** | 24 dB/octave (80 dB/decade) |
-| **Ripple בפסבנד** | 0 dB (שטוח לחלוטין!) |
-| **שלב (Phase)** | לא ליניארי, אבל... |
-| **Zero-phase?** | כן! בזכות `filtfilt()` |
+| **רוחב פס** | 2-8 Hz (מורחב מקליני 3-7 Hz לשמירה על קצוות הפס) |
+| **Roll-off** | 48 dB/octave (אפקטיבי, מוכפל ע"י filtfilt) |
+| **Ripple בפסבנד** | 0 dB (שטוח מקסימלית) |
+| **עיוות פאזה** | אפס (filtfilt = סינון קדימה-אחורה) |
 
-### **שלב 2.5: החלת פילטרים - Zero-Phase Filtering**
-
-```python
-# סינון הציר הדומיננטי
-axis_filtered = filtfilt(b_tremor, a_tremor, dominant_axis)
-axis_rest = filtfilt(b_rest, a_rest, dominant_axis)
-axis_ess = filtfilt(b_ess, a_ess, dominant_axis)
-
-# סינון הוקטור התוצאתי
-result_filtered = filtfilt(b_tremor, a_tremor, accel_mag)
-result_rest = filtfilt(b_rest, a_rest, accel_mag)
-result_ess = filtfilt(b_ess, a_ess, accel_mag)
-```
-
-**למה `filtfilt()` ולא `filter()`?**
-
-`filtfilt()` = **Zero-Phase Filtering**
-- **מסנן קדימה ואחורה** (Forward-Backward)
-- **אין עיוות פאזה** (No phase distortion)
-- **שומר על מיקום זמן של תכונות** (אירועים נשארים באותו מקום)
-- **חשוב לניתוח רפואי!** (לא משנה את התזמון של הרעד)
-
-**איך זה עובד:**
+**איך filtfilt עובד:**
 ```
 Signal → [Filter Forward] → [Reverse] → [Filter Backward] → Result
 ```
-**תוצאה:** שיפוע של 48 dB/octave (כפול!), אפס שינוי פאזה
+- מכפיל את שיפוע ה-roll-off (24 → 48 dB/octave)
+- מבטל כל עיוות פאזה → אירועים נשארים בזמן הנכון
+- קריטי לניתוח רפואי שבו תזמון חשוב
 
-### **שלב 2.6: ניתוח PSD - Power Spectral Density**
+### **שלב 2.2: וקטור תוצאתי מצירים מסוננים**
 
 ```python
-nperseg = min(len(accel_mag), int(FS * 4))  # חלון של 4 שניות
-noverlap = int(nperseg * 0.5)                # חפיפה של 50%
-
-# חישוב PSD בשיטת Welch
-f, psd = welch(signal, FS, nperseg=nperseg, noverlap=noverlap)
+# שילוב הצירים המסוננים לגל סקלרי 1D אחד
+result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
 ```
+
+**מה זה עושה:**
+- ממיר 3 צירים מסוננים ל**מגניטודה** אחת בכל דגימה
+- לוכד **100% מהאנרגיה הקינטית** של הרעד
+- בלתי תלוי כיוון: מודד חומרת רעד כוללת ללא קשר לאוריינטציית החיישן
+
+**למה אחרי סינון (ולא לפני)?**
+
+פעולת `sqrt(x² + y² + z²)` היא **לא-ליניארית**. אם מופעלת על נתונים
+לא מסוננים (שמכילים offset גדול של כבידה), הלא-ליניאריות מעוותת את האות
+ויוצרת תוכן תדר מזויף. על ידי סינון קודם:
+- כל ציר הוא תנודת רעד נקייה עם ממוצע אפס
+- המגניטודה מייצגת באמינות את מעטפת הרעד התלת-ממדי
+- אין ארטיפקטים של כבידה שמזהמים את התוצאה
+
+### **שלב 2.3: חישוב RMS (עוצמת רעד כוללת)**
+
+```python
+# Root Mean Square של הוקטור התוצאתי המסונן
+metrics['accel_rms'] = np.sqrt(np.mean(result_filtered**2))
+```
+
+**צעד אחר צעד:**
+1. `squared = result_filtered ** 2` — ריבוע כל דגימה
+2. `mean_squared = mean(squared)` — ממוצע כל הערכים המרובעים
+3. `rms = sqrt(mean_squared)` — שורש ריבועי
+
+**למה RMS?**
+- RMS פרופורציוני ל**אנרגיה הקינטית הכוללת** של הרעד
+- תמיד חיובי (בניגוד לממוצע, שמתבטל בתנודות סימטריות)
+- **סטנדרט קליני בינלאומי** למדידת חומרת רעד
+- מחושב מהוקטור התוצאתי המסונן → לוכד 100% מאנרגיית הרעד התלת-ממדית
+
+### **שלב 2.4: ניתוח PSD על צירים מסוננים בנפרד**
+
+```python
+nperseg = min(len(ax_filt), int(FS * 4))  # חלון של 4 שניות
+noverlap = int(nperseg * 0.5)              # חפיפה של 50%
+
+# Welch PSD על כל ציר מסונן בנפרד
+f, psd_ax = welch(ax_filt, FS, nperseg=nperseg, noverlap=noverlap)
+_, psd_ay = welch(ay_filt, FS, nperseg=nperseg, noverlap=noverlap)
+_, psd_az = welch(az_filt, FS, nperseg=nperseg, noverlap=noverlap)
+
+# סכום PSD לפי ציר = הספק ספקטרלי כולל
+psd_total = psd_ax + psd_ay + psd_az
+```
+
+**למה PSD על צירים בודדים (ולא על הוקטור התוצאתי)?**
+
+הוקטור התוצאתי `R = sqrt(x² + y² + z²)` הוא פעולה **לא-ליניארית**.
+חישוב PSD של R ייצור **ארטיפקטים של הכפלת תדר** — הרמוניות מזויפות
+בתדר 2× מתדר הרעד האמיתי. על ידי חישוב PSD על כל ציר ליניארי
+(מסונן) וסיכום, מקבלים הספק ספקטרלי כולל נכון ללא עיוות מתמטי.
 
 **פרמטרי Welch:**
 
@@ -294,23 +246,27 @@ f, psd = welch(signal, FS, nperseg=nperseg, noverlap=noverlap)
 | **Frequency resolution** | 0.25 Hz | דיוק זיהוי תדר |
 | **Window type** | Hann (ברירת מחדל) | מפחית דליפה ספקטרלית |
 
-**למה שיטת Welch:**
-- מחלק את האות לחלונות קטנים
-- מחשב FFT לכל חלון
-- ממצע את התוצאות
-- **מפחית רעש**, משפר אמינות
-
-### **שלב 2.7: חישוב מדדים קליניים**
+### **שלב 2.5: חישוב מדדים**
 
 ```python
-# תכונות מ-Paper 1 (MDPI)
-metrics['accel_mean'] = np.mean(accel_filt)              # ממוצע
-metrics['accel_rms'] = np.sqrt(np.mean(accel_filt**2))  # RMS
-metrics['accel_max'] = np.max(np.abs(accel_filt))       # מקסימום
+# תדר דומיננטי: פיק PSD הגבוה ביותר בפס 2-8 Hz
+rest_mask = (freq >= 2.0) & (freq <= 8.0)
+band_psd = psd_total[rest_mask]
+peak_idx = np.argmax(band_psd)
+metrics['dominant_freq'] = freq[rest_mask][peak_idx]
 
-# כוח בפסים
-rest_mask = (freq >= 3) & (freq <= 7)
-ess_mask = (freq >= 6) & (freq <= 12)
+# SNR: פיק PSD מול רצפת רעש של חיישן MPU6050
+# Datasheet: 400 µg/√Hz צפיפות רעש
+# PSD רעש לכל ציר = (400e-6 * 9.81)² (m/s²)²/Hz
+# סכום 3 צירים → sensor_noise_floor = 3 × PSD רעש לציר
+sensor_noise_floor = 3 * MPU6050_NOISE_PSD
+metrics['snr_db'] = 10 * log10(peak_psd / sensor_noise_floor)
+
+# DPR: הספק אינטגרלי סביב הפיק (±1 bin) / הספק כולל בפס
+peak_power = trapz(psd[peak ± 1 bin])
+total_power = trapz(psd[2-8 Hz])
+metrics['dominant_power_ratio'] = peak_power / total_power
+```
 
 metrics['power_rest'] = np.sum(psd[rest_mask])      # כוח ב-3-7 Hz
 metrics['power_ess'] = np.sum(psd[ess_mask])        # כוח ב-6-12 Hz
@@ -525,34 +481,31 @@ else:
 
 ### **שלב 2: Offline Analyzer (תוכנה)**
 ```
-CSV עם נתונים גולמיים
+CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
            ↓
-[חישוב Resultant Vector]  ← mag_raw = √(x² + y² + z²)
+[סינון Bandpass לכל ציר]   ← filtfilt(2-8 Hz) על Ax, Ay, Az בנפרד
+  - מסיר DC (כבידה) אוטומטית
+  - מסיר רעש גבוה
+  - מטפל נכון בסיבוב פרק כף היד
            ↓
-[הסרת DC = הסרת כבידה]  ← mag = mag_raw - mean(mag_raw)
+[וקטור תוצאתי]            ← R = √(Ax_f² + Ay_f² + Az_f²)
+  - מצירים מסוננים
+  - לוכד 100% אנרגיה קינטית
            ↓
-[זיהוי ציר דומיננטי]      ← energy = Σ(signal²)
+[חישוב RMS]               ← √(mean(R²))
+  - עוצמת רעד כוללת
            ↓
-[Butterworth Bandpass Filters]
-  - Combined: 3-12 Hz (Order 4)
-  - Rest: 3-7 Hz (Order 4)
-  - Essential: 6-12 Hz (Order 4)
-           ↓
-[Zero-Phase Filtering]     ← filtfilt() - קדימה ואחורה
-           ↓
-[PSD Analysis (Welch)]
-  - Window: 4 sec
-  - Overlap: 50%
+[PSD על צירים בודדים]     ← Welch על Ax_f, Ay_f, Az_f בנפרד
+  - סכום PSD לפי ציר       ← מונע הכפלת תדר
+  - Window: 4 sec, Overlap: 50%
   - Resolution: 0.25 Hz
            ↓
-[חישוב מדדים קליניים]
-  - Mean, RMS, Max
-  - Power בפסים
-  - תדר דומיננטי
-           ↓
-[סיווג אוטומטי]
-  - Rest / Essential / Mixed
-  - רמת ביטחון
+[חישוב מדדים]
+  - תדר דומיננטי (Hz)
+  - משרעת RMS (m/s²)
+  - SNR פיק מול רצפת רעש חיישן (dB)
+  - משרעת מקסימלית (m/s²)
+  - DPR (יחס הספק דומיננטי)
 ```
 
 ---
