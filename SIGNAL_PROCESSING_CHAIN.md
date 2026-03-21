@@ -37,9 +37,8 @@
 ```cpp
 // File: esp32_usb_serial_safe.ino
 
-// טווח מדידה
-mpu.setAccelerometerRange(MPU6050_RANGE_4_G);      // ±4g
-mpu.setGyroRange(MPU6050_RANGE_500_DEG);           // ±500°/s
+// טווח מדידה (אקסלרומטר בלבד — ג'ירוסקופ לא בשימוש)
+mpu.setAccelerometerRange(MPU6050_RANGE_2_G);      // ±2g
 
 // פילטר חומרה מובנה (DLPF - Digital Low Pass Filter)
 mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);        // 21 Hz LPF
@@ -49,7 +48,7 @@ mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);        // 21 Hz LPF
 
 #### **1. חיישן פיזי:**
 - **Accelerometer:** מודד תאוצה לינארית (כולל כוח הכבידה)
-- **Gyroscope:** מודד מהירות זוויתית (סיבוב)
+- **Gyroscope:** קיים ב-MPU6050 אבל **לא בשימוש** ב-firmware
 - **דגימה פנימית:** 1 kHz (1000 Hz)
 
 #### **2. פילטר חומרה מובנה - DLPF (Digital Low Pass Filter):**
@@ -69,17 +68,15 @@ mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);        // 21 Hz LPF
 - **אנחנו לא יכולים לבטל אותו - הנתונים שמגיעים כבר מסוננים ב-21 Hz**
 - **כל תדרים מעל ~21 Hz כבר מוחלשים משמעותית**
 
-#### **3. קליברציה (Calibration):**
+#### **3. קליברציה (אקסלרומטר בלבד):**
 
 ```cpp
-// הסרת offset של החיישן
-float ax = a.acceleration.x - aX_off;  // aX_off = 0.58
-float ay = a.acceleration.y - aY_off;  // aY_off = -0.20
-float az = a.acceleration.z - aZ_off;  // aZ_off = -1.23
+// הסרת offset של החיישן (אקסלרומטר בלבד, לטווח ±2G)
+float aX_off = 0.301009, aY_off = 0.016101, aZ_off = 1.046231;
 
-float gx = (g.gyro.x * 57.296) - gX_off;  // המרה מ-rad/s ל-deg/s
-float gy = (g.gyro.y * 57.296) - gY_off;
-float gz = (g.gyro.z * 57.296) - gZ_off;
+float ax = a.acceleration.x - aX_off;
+float ay = a.acceleration.y - aY_off;
+float az = a.acceleration.z - aZ_off;
 ```
 
 **מה הקליברציה עושה:**
@@ -89,32 +86,32 @@ float gz = (g.gyro.z * 57.296) - gZ_off;
 #### **4. פורמט נתונים:**
 
 ```
-Timestamp,Ax,Ay,Az,Gx,Gy,Gz
-0,0.580,-0.200,-1.230,22.360,5.810,0.170
-10,0.582,-0.198,-1.228,22.358,5.808,0.168
+Timestamp,Ax,Ay,Az
+0,0.580,-0.200,-1.230
+10,0.582,-0.198,-1.228
 ```
 
 **יחידות:**
 - **Timestamp:** אלפיות שנייה (ms)
 - **Ax, Ay, Az:** תאוצה (m/s²) - **כולל כוח כבידה!**
-- **Gx, Gy, Gz:** מהירות זוויתית (°/s)
 
 ### **📊 סיכום שלב ESP32:**
 
 ```
 תאוצה אמיתית + כוח כבידה (9.81 m/s²)
            ↓
-      [ADC במפ6050]
+      [ADC במפ6050, טווח ±2g]
            ↓
   [DLPF Hardware: 21 Hz LPF]  ← פילטר חומרה!
            ↓
     [דגימה 100 Hz]
            ↓
-   [הסרת offset חיישן]
+   [הסרת offset חיישן (אקסלרומטר בלבד)]
            ↓
       [USB Serial]
            ↓
-    CSV עם נתונים:
+    CSV עם נתונים (4 עמודות):
+    Timestamp, Ax, Ay, Az
     - מסוננים ב-21 Hz
     - עדיין עם כוח כבידה
     - ללא offset חיישן
@@ -127,9 +124,9 @@ Timestamp,Ax,Ay,Az,Gx,Gy,Gz
 ### **קלט: CSV File**
 
 ```python
-# offline_analyzer.py
+# offline_analyzer_exp.py
 
-# טעינת נתונים מ-CSV
+# טעינת נתונים מ-CSV (4 עמודות, אקסלרומטר בלבד)
 ax = data['Ax']  # m/s² (כולל כבידה, מסונן ב-21 Hz)
 ay = data['Ay']
 az = data['Az']
@@ -262,57 +259,44 @@ psd_dominant = {'X': psd_ax, 'Y': psd_ay, 'Z': psd_az}[dominant_axis]
 
 ### **שלב 2.5: חישוב מדדים**
 
-**מדדי תחום הזמן** מחושבים מה**וקטור התוצאתי** (לוכד 100% אנרגיה תלת-ממדית):
+**מדד תחום הזמן** — מחושב מה**וקטור התוצאתי** (לוכד 100% אנרגיה תלת-ממדית):
 ```python
 metrics['accel_rms'] = sqrt(mean(result_filtered**2))   # RMS
-metrics['accel_max'] = max(abs(result_filtered))         # משרעת מקסימלית
 ```
 
-**מדדי תחום התדר** מחושבים מה**ציר הדומיננטי** בלבד:
+**מדדי תחום התדר** — מחושבים מה**ציר הדומיננטי PSD** בלבד:
 ```python
 # תדר דומיננטי: פיק PSD הגבוה ביותר בפס 2-8 Hz בציר הדומיננטי
 band_psd = psd_dominant[rest_mask]
 peak_idx = argmax(band_psd)
 metrics['dominant_freq'] = freq[rest_mask][peak_idx]
+metrics['peak_power_density'] = band_psd[peak_idx]
 
-# SNR: פיק PSD מול רצפת רעש של חיישן MPU6050 (ציר בודד)
-# Datasheet: 400 µg/√Hz צפיפות רעש
-# PSD רעש לציר = (400e-6 * 9.81)² (m/s²)²/Hz
-metrics['snr_db'] = 10 * log10(peak_psd / MPU6050_NOISE_PSD)
+# הספק כולל בפס (אינטגרל PSD על 2-8 Hz)
+metrics['total_power'] = trapz(psd_dominant[2-8 Hz], freq[2-8 Hz])
 
 # DPR: הספק אינטגרלי סביב הפיק (±1 bin) / הספק כולל בפס
-peak_power = trapz(psd_dominant[peak ± 1 bin])
-total_power = trapz(psd_dominant[2-8 Hz])
+peak_power = trapz(psd_dominant[peak ± 1 bin], freq[peak ± 1 bin])
 metrics['dominant_power_ratio'] = peak_power / total_power
+
+# סטייה מתדר PWM של המנוע (אינפורמטיבי, ללא pass/fail)
+metrics['deviation'] = abs(dominant_freq - pwm_freq)
 ```
 
-#### **📊 הסבר מפורט של המדדים הקליניים:**
+#### **📊 הסבר מפורט של המדדים:**
 
-**1️⃣ MEAN (ממוצע) - `accel_mean`**
+**1️⃣ RMS (Root Mean Square) - `accel_rms`**
 ```python
-mean = np.mean(signal_filtered)  # ממוצע חשבוני
-```
-- **מה זה:** הממוצע של כל הדגימות המסוננות
-- **יחידות:** **m/s²** (מטר לשנייה בריבוע)
-- **טווח ערכים תקין:** ±0.01 m/s² (קרוב לאפס)
-- **משמעות קלינית:**
-  - **~0:** תנודות סימטריות (טוב!)
-  - **>0.1:** יש הטיה - אולי לא הוסר DC לגמרי
-- **איפה בגרפים:**
-  - Row 2, Plot 2: קו דמיוני אופקי דרך מרכז האות
-  - Row 3, Plot 2: רמה ממוצעת של הוקטור התוצאתי
-
-**2️⃣ RMS (Root Mean Square) - `accel_rms`**
-```python
-rms = √[mean(signal²)]  # שורש ממוצע ריבועים
+rms = √[mean(result_filtered²)]  # שורש ממוצע ריבועים של הוקטור התוצאתי
 ```
 - **מה זה:** **מדד החומרה העיקרי!** גודל ממוצע של הרעד
 - **יחידות:** **m/s²** (מטר לשנייה בריבוע)
 - **נוסחה צעד-צעד:**
-  1. `squared = signal ** 2` - ריבוע כל דגימה
-  2. `mean_squared = mean(squared)` - ממוצע
-  3. `rms = √(mean_squared)` - שורש
-- **למה RMS ולא Mean?**
+  1. `result_filtered = sqrt(ax_filt² + ay_filt² + az_filt²)` — וקטור תוצאתי בכל דגימה
+  2. `squared = result_filtered ** 2` — ריבוע כל דגימה
+  3. `mean_squared = mean(squared)` — ממוצע
+  4. `rms = √(mean_squared)` — שורש
+- **למה RMS?**
   - RMS **תמיד חיובי** (גם אם האות נע למעלה ולמטה)
   - RMS שקול ל**אנרגיה** של האות
   - **מדד בינלאומי** לחומרת רעד
@@ -321,63 +305,15 @@ rms = √[mean(signal²)]  # שורש ממוצע ריבועים
   - **0.10-0.30 m/s²** → Moderate (בינוני)
   - **> 0.30 m/s²** → **Severe (חמור)**
 - **איפה בגרפים:**
-  - **Row 2, Plot 2** (Y-Axis Filtered): הכותרת מציגה RMS!
-  - **Row 3, Plot 2** (Resultant Filtered): גם כאן בכותרת!
-  - **דוגמה מהתמונה שלך:** RMS: 1.6238 m/s² → **SEVERE!**
+  - **Figure 2, Fig 2.1** (Dominant Axis Raw): הכותרת מציגה RMS
+  - **Figure 3, Fig 3.3** (Metrics panel): רשום כ-"RMS Amplitude"
 
-**3️⃣ MAX (מקסימום) - `accel_max`**
+**2️⃣ DOMINANT FREQUENCY (תדר דומיננטי) - `dominant_freq`**
 ```python
-max_amplitude = np.max(np.abs(signal))  # ערך מוחלט מקסימלי
-```
-- **מה זה:** השיא החזק ביותר של הרעד
-- **יחידות:** **m/s²**
-- **משמעות:**
-  - פיקים חדים = רעד לא יציב
-  - פיקים גבוהים = רגעי רעד חזקים מאוד
-- **איפה בגרפים:**
-  - Row 2/3, Plot 2: הנקודה הגבוהה/נמוכה ביותר
-  - Row 2/3, Plot 2: קצה העטיפה (envelope)
-
-**4️⃣ POWER (כוח ספקטרלי) - `power_rest`, `power_ess`**
-```python
-# אינטגרציה של PSD על טווח תדרים
-power_rest = Σ[PSD בין 3-7 Hz]  # סכום
-power_ess = Σ[PSD בין 6-12 Hz]
-```
-- **מה זה:** סכום (אינטגרל) של ה-PSD בטווח תדרים
-- **יחידות:** **m²/s⁴** (מטר בריבוע לשנייה בחזקת 4)
-  - **למה היחידות האלה?**
-    - PSD יחידות: (m/s²)²/Hz = m²/s⁴/Hz
-    - Power = ∫PSD dF = m²/s⁴/Hz × Hz = **m²/s⁴**
-- **הסבר פיזי:**
-  ```
-  PSD[f] = "כוח בתדר f בודד"
-  Power = ∫PSD df = "כוח כולל בטווח תדרים"
-  ```
-- **ערכים טיפוסיים:**
-  - **Power < 2:** רעד חלש בפס זה
-  - **Power 2-5:** רעד בינוני
-  - **Power > 5:** רעד חזק בפס זה
-- **שימוש לסיווג:**
-  ```python
-  ratio = power_rest / power_ess
-  if ratio > 2.0:  → Rest Tremor
-  if ratio < 0.5:  → Essential Tremor
-  else:            → Mixed
-  ```
-- **איפה בגרפים:**
-  - **Row 4, Plot 1** (PSD Y-Axis): האזורים הצבועים!
-    - אזור ורוד (3-7 Hz) = Rest
-    - אזור כחול (6-12 Hz) = Essential
-  - **Row 4, Plot 2** (PSD Resultant): אותם אזורים
-  - **Row 4, Plot 3** (Bar Chart): **העמודות עצמן!**
-    - גובה עמודה אדומה = `power_rest`
-    - גובה עמודה כחולה = `power_ess`
-
-**5️⃣ DOMINANT FREQUENCY (תדר דומיננטי)**
-```python
-peak_idx = np.argmax(psd[3:12 Hz])  # מציאת הפסגה
-dominant_freq = freq[peak_idx]       # התדר שלה
+# מציאת פיק בפס 2-8 Hz בציר הדומיננטי
+rest_mask = (freq >= 2.0) & (freq <= 8.0)
+peak_idx = np.argmax(psd_dominant[rest_mask])
+dominant_freq = freq[rest_mask][peak_idx]
 ```
 - **מה זה:** התדר עם הכוח המקסימלי
 - **יחידות:** **Hz** (הרץ - מחזורים לשנייה)
@@ -386,84 +322,80 @@ dominant_freq = freq[peak_idx]       # התדר שלה
   - **5-7 Hz:** גבול (Borderline)
   - **8-12 Hz:** Essential Tremor
 - **איפה בגרפים:**
-  - **Row 4, Plot 1 & 2**: **עיגול אדום ● על הפסגה!**
-  - הכיתוב: `Peak: 5.75 Hz` (דוגמה)
+  - **Figure 3, Fig 3.1 & 3.2**: **עיגול אדום ● על הפסגה!**
+  - **Figure 6** (FFT): עיגול אדום על פיק ה-FFT
+
+**3️⃣ PEAK PSD - `peak_power_density`**
+```python
+peak_power_density = psd_dominant[rest_mask][peak_idx]
+```
+- **מה זה:** ערך PSD מקסימלי בפס 2-8 Hz
+- **יחידות:** **(m/s²)²/Hz** (צפיפות הספק ספקטרלי)
+- **לא אותו דבר כמו הספק אינטגרלי!**
+  - Peak PSD = גובה הפיק בגרף PSD
+  - Band Power = שטח מתחת לעקומת PSD
+- **איפה בגרפים:**
+  - **Figure 3, Fig 3.1 & 3.2**: גובה העיגול האדום ● (ב-dB)
+
+**4️⃣ BAND POWER (הספק כולל) - `total_power`**
+```python
+# אינטגרציה של PSD על 2-8 Hz בשיטת הטרפז
+total_power = np.trapz(psd_dominant[2-8 Hz], freq[2-8 Hz])
+```
+- **מה זה:** **אינטגרל (שטח מתחת לעקומה)** של PSD בפס הניתוח
+- **יחידות:** **(m/s²)²** = **m²/s⁴**
+  - **📐 גזירת יחידות:**
+    - PSD יחידות: (m/s²)²/Hz = m²/s⁴/Hz
+    - Power = ∫PSD dF = m²/s⁴/Hz × Hz = **m²/s⁴**
+- **איפה בגרפים:**
+  - **Figure 3, Fig 3.3** (Metrics panel): רשום כ-"Band Power"
+
+**5️⃣ DPR (Dominant Power Ratio) - `dominant_power_ratio`**
+```python
+# הספק מרוכז סביב הפיק (±1 bin = ±0.25 Hz)
+peak_power = trapz(psd_dominant[peak-1 .. peak+1], freq[peak-1 .. peak+1])
+total_power = trapz(psd_dominant[2-8 Hz], freq[2-8 Hz])
+DPR = peak_power / total_power
+```
+- **מה זה:** חלק מההספק הכולל בפס שמרוכז בתדר הדומיננטי
+- **יחידות:** ללא ממד (0 עד 1, מוצג באחוזים)
+- **פרשנות:**
+  - **DPR קרוב ל-100%:** כמעט כל האנרגיה בתדר אחד — אות חזק ונקי
+  - **DPR קרוב ל-0%:** אנרגיה מפוזרת על הפס — אין תדר דומיננטי, דמוי רעש
+- **איפה בגרפים:**
+  - **Figure 3, Fig 3.3** (Metrics panel): רשום כ-"Dom. Power Ratio"
+
+**6️⃣ DEVIATION (סטייה) - `deviation`**
+```python
+deviation = abs(dominant_freq - pwm_freq)
+```
+- **מה זה:** ההפרש בין התדר הדומיננטי שזוהה לבין תדר ה-PWM של המנוע
+- **יחידות:** **Hz**
+- **מטרה:** אינפורמטיבי בלבד — ללא שיפוט pass/fail
+- **איפה בגרפים:**
+  - **Figure 3, Fig 3.3** (Metrics panel): רשום כ-"Deviation"
+  - **Figure 3, Fig 3.2** (PSD zoomed): פס כחול סביב תדר ה-PWM
 
 ---
 
 #### **🔗 טבלת קורלציה: מדדים ↔ גרפים**
 
-| מדד | ערך בדוגמה | יחידות | איפה רואים | איך לזהות |
-|-----|-----------|--------|-------------|-----------|
-| **Mean** | 0.0014 | m/s² | Row 2/3, Plot 2 | קו דמיוני אופקי (קרוב לאפס) |
-| **RMS** | 1.6238 | m/s² | Row 2/3, Plot 2 | **בכותרת הגרף!** "RMS: X.XXXX" |
-| **Max** | 8.8714 | m/s² | Row 2/3, Plot 2 | הנקודה הגבוהה ביותר |
-| **Power Rest** | 6.5008 | m²/s⁴ | Row 4, Plot 3 | **גובה עמודה אדומה** |
-| **Power Ess** | 8.7993 | m²/s⁴ | Row 4, Plot 3 | **גובה עמודה כחולה** |
-| **Dom. Freq** | 5.75 | Hz | Row 4, Plot 1&2 | **עיגול אדום ●** |
+| מדד | יחידות | איפה רואים | איך לזהות |
+|-----|--------|-------------|-----------|
+| **RMS** | m/s² | Figure 2, Fig 2.1; Figure 3, Fig 3.3 | **בכותרת הגרף!** "RMS: X.XXXX" |
+| **Dom. Freq** | Hz | Figure 3, Fig 3.1 & 3.2; Figure 6 | **עיגול אדום ● מיקום** |
+| **Peak PSD** | (m/s²)²/Hz | Figure 3, Fig 3.1 & 3.2 | **עיגול אדום ● גובה** (ב-dB) |
+| **Band Power** | (m/s²)² | Figure 3, Fig 3.3 | רשום בפאנל מדדים |
+| **DPR** | % | Figure 3, Fig 3.3 | רשום בפאנל מדדים |
+| **Deviation** | Hz | Figure 3, Fig 3.2 & 3.3 | קו PWM כחול + פס |
 
-**דוגמה מהתמונה שלך - פענוח מלא:**
-```
-┌─ Clinical Metrics (טבלה ב-Figure 1) ─┐
-│                                      │
-│ Axis RMS (Y): 3.5928 m/s²           │ ← RMS של ציר Y בלבד
-│ Resultant RMS: 1.6238 m/s²          │ ← RMS של וקטור תוצאתי
-│ Mean: 0.0014 m/s²                   │ ← קרוב לאפס ✓
-│ Max: 8.8714 m/s²                    │ ← פיק גבוה מאוד!
-│                                      │
-│ Rest (3-7 Hz):                      │
-│   Power: 6.5008 m²/s⁴               │ ← עמודה אדומה בגרף
-│                                      │
-│ Essential (6-12 Hz):                │
-│   Power: 8.7993 m²/s⁴               │ ← עמודה כחולה (גבוהה יותר!)
-│                                      │
-│ Ratio: 0.74                         │ ← 6.5/8.8 = 0.74
-│ Type: Mixed Tremor                  │ ← כי 0.5 < 0.74 < 2.0
-│ Confidence: Moderate                │
-│                                      │
-│ Dominant Freq: 5.75 Hz              │ ← העיגול האדום ב-PSD
-└──────────────────────────────────────┘
-```
-
-**התאמה לגרפים (בממשק MATLAB עם טאבים):**
-1. **Figure 4, Fig 4.3** (Bar Chart):
-   - עמודה אדומה גובה 6.5 ← Power Rest
-   - עמודה כחולה גובה 8.8 ← Power Essential
-   - כחול > אדום → Essential דומיננטי קצת
-
-2. **Figure 4, Fig 4.1 & 4.2** (PSD):
-   - עיגול אדום ● ב-5.75 Hz ← Dominant Frequency
-   - אזור כחול (6-12) גבוה יותר ← Essential חזק יותר
-
-3. **Figure 2, Fig 2.2** (Y-Axis Filtered):
-   - כותרת: "RMS: 3.5928 m/s²" ← RMS של ציר Y
-   - רוחב האות גדול ← RMS גבוה
-
-4. **Figure 3, Fig 3.2** (Resultant Filtered):
-   - כותרת: "RMS: 1.6238 m/s²" ← RMS של וקטור תוצאתי
-   - עטיפה רחבה ← רעד חזק
-
-**ניווט:**
-- לחץ על טאב "Figure 1" לטבלת מדדים
-- לחץ על טאב "Figure 2" לניתוח ציר Y
-- לחץ על טאב "Figure 3" לניתוח וקטור תוצאתי
-- לחץ על טאב "Figure 4" לניתוח תדרים (PSD)
-
-### **שלב 2.8: סיווג רעד**
-
-```python
-power_ratio = power_rest / (power_ess + 1e-10)
-
-if power_ratio > 2.0:
-    tremor_type = "Rest Tremor (Parkinsonian)"      # פרקינסון
-    confidence = "High"
-elif power_ratio < 0.5:
-    tremor_type = "Essential Tremor (Postural)"     # אסנציאלי
-    confidence = "High"
-else:
-    tremor_type = "Mixed Tremor"                    # מעורב
-    confidence = "Moderate"
-```
+**ניווט (ממשק טאבים):**
+- לחץ על טאב "Figure 1" למאפייני פילטר (Bode magnitude & phase)
+- לחץ על טאב "Figure 2" לציר דומיננטי (raw & filtered, תצוגת 40-80 שניות)
+- לחץ על טאב "Figure 3" לניתוח PSD ופאנל מדדים
+- לחץ על טאב "Figure 4" לחלון זום 5 שניות A (אמצע ההקלטה)
+- לחץ על טאב "Figure 5" לחלון זום 5 שניות B (רצף)
+- לחץ על טאב "Figure 6" למגניטודה FFT (1-12 Hz, 120 שניות מלא)
 
 ---
 
@@ -473,24 +405,22 @@ else:
 ```
 תאוצה פיזית + כבידה (9.81 m/s²)
            ↓
-   [ADC 16-bit במפ6050]
+   [ADC 16-bit במפ6050, ±2g]
            ↓
  [DLPF Hardware: 21 Hz]  ← מסנן Low-Pass חומרתי
            ↓
    [דגימה 100 Hz]
            ↓
- [הסרת offset חיישן]
+ [הסרת offset חיישן (אקסלרומטר בלבד)]
            ↓
-  [קליברציה: ±4g, ±500°/s]
-           ↓
-    CSV: Ax, Ay, Az (m/s²)
+    CSV: Timestamp, Ax, Ay, Az (m/s²)
     - מסונן ב-21 Hz
     - כולל כבידה
 ```
 
-### **שלב 2: Offline Analyzer (תוכנה)**
+### **שלב 2: Offline Analyzer Experimental (תוכנה)**
 ```
-CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
+CSV עם נתונים גולמיים (Timestamp, Ax, Ay, Az כולל כבידה)
            ↓
 [סינון Bandpass לכל ציר]   ← filtfilt(2-8 Hz) על Ax, Ay, Az בנפרד
   - מסיר DC (כבידה) אוטומטית
@@ -513,11 +443,12 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 [חישוב מדדים]
   תחום זמן (מוקטור תוצאתי):
   - משרעת RMS (m/s²)
-  - משרעת מקסימלית (m/s²)
-  תחום תדר (מציר דומיננטי):
+  תחום תדר (מציר דומיננטי PSD):
   - תדר דומיננטי (Hz)
-  - SNR פיק מול רצפת רעש חיישן (dB)
+  - Peak PSD ((m/s²)²/Hz)
+  - הספק כולל בפס ((m/s²)²)
   - DPR (יחס הספק דומיננטי)
+  - סטייה מתדר PWM (Hz)
 ```
 
 ---
@@ -532,7 +463,7 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 ### **2. הגבלת רוחב פס:**
 ⚠️ **חשוב להכיר!**
 - כל התדרים מעל 21 Hz כבר מוחלשים בחומרה
-- אנחנו מנתחים רק 3-12 Hz, אז **זה לא מפריע**
+- אנחנו מנתחים רק 2-8 Hz, אז **זה לא מפריע**
 - אבל אם היינו רוצים לנתח תדרים גבוהים יותר (15-20 Hz), היינו מוגבלים
 
 ### **3. רעש תרמי ורעש מדידה:**
@@ -542,7 +473,7 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 - רעש סביבתי
 
 ### **4. עיוות פאזה מינורי:**
-⚠️ הפילטר החומרתי עשוי להוסיף עיוות פאזה קטן ב-3-12 Hz
+⚠️ הפילטר החומרתי עשוי להוסיף עיוות פאזה קטן ב-2-8 Hz
 - **אבל:** `filtfilt()` שלנו מתקן את זה!
 - **תוצאה:** אפס עיוות כולל
 
@@ -553,9 +484,7 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 | שלב | מסנן | סוג | רוחב פס | תדר חיתוך | Roll-off | Zero-Phase? |
 |-----|------|-----|---------|-----------|----------|-------------|
 | **ESP32** | DLPF (MPU6050) | Low-Pass | DC - 21 Hz | 21 Hz | ~20 dB/dec | ❌ לא |
-| **Analyzer 1** | Combined Tremor | Bandpass | 3-12 Hz | 3 Hz, 12 Hz | 48 dB/oct | ✅ כן |
-| **Analyzer 2** | Rest Tremor | Bandpass | 3-7 Hz | 3 Hz, 7 Hz | 48 dB/oct | ✅ כן |
-| **Analyzer 3** | Essential Tremor | Bandpass | 6-12 Hz | 6 Hz, 12 Hz | 48 dB/oct | ✅ כן |
+| **Analyzer** | Tremor Bandpass | Bandpass | 2-8 Hz | 2 Hz, 8 Hz | 48 dB/oct (filtfilt) | ✅ כן |
 
 ---
 
@@ -563,7 +492,7 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 
 ### **1. למה אנחנו לא מסוננים ב-ESP32 יותר?**
 - הפילטר של 21 Hz הוא **אנטי-אליאסינג** בלבד
-- סינון ספציפי לרעד (3-12 Hz) נעשה **רק בניתוח**
+- סינון ספציפי לרעד (2-8 Hz) נעשה **רק בניתוח**
 - כך אפשר לשנות פרמטרים בלי לשנות firmware
 
 ### **2. למה Butterworth Order 4?**
@@ -578,7 +507,7 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 - **מכפיל את Roll-off** (48 dB/oct במקום 24)
 
 ### **4. למה Welch עם חלונות של 4 שניות?**
-- **רזולוציה תדר:** 0.25 Hz (מספיק טוב ל-3-12 Hz)
+- **רזולוציה תדר:** 0.25 Hz (מספיק טוב ל-2-8 Hz)
 - **הפחתת רעש:** ממוצע על חלונות משפר SNR
 - **סטנדרט:** נפוץ בניתוח רעידות
 
@@ -587,12 +516,10 @@ CSV עם נתונים גולמיים (Ax, Ay, Az כולל כבידה)
 ## ✅ סיכום פסבנדים (Passband Summary)
 
 ```
-תדרים (Hz):  0    3    6    7    12   21   50 (Nyquist)
-             |____|____|____|____|____|____|
+תדרים (Hz):  0    2         8         21   50 (Nyquist)
+             |____|_________|_________|____|
 ESP32 DLPF:  |████████████████████████|      ← 21 Hz LPF
-Rest Tremor: |    |████████|                 ← 3-7 Hz BPF
-Essential:   |         |████████|            ← 6-12 Hz BPF
-Combined:    |    |████████████████|         ← 3-12 Hz BPF
+Tremor BPF:  |    |█████████|                ← 2-8 Hz BPF (filtfilt)
 
 ████ = פס מעבר (Passband)
 |    = תדר חיתוך
@@ -601,8 +528,8 @@ Combined:    |    |████████████████|         ←
 ---
 
 **סיכום אחרון:**
-1. **ESP32:** מסנן 21 Hz בחומרה (אנטי-אליאסינג)
-2. **Analyzer:** 3 מסננים Butterworth Order 4 (3-12 Hz, 3-7 Hz, 6-12 Hz)
+1. **ESP32:** מסנן 21 Hz בחומרה (אנטי-אליאסינג), טווח ±2g, אקסלרומטר בלבד
+2. **Analyzer:** מסנן Butterworth Order 4 אחד (2-8 Hz), מופעל לכל ציר בנפרד דרך filtfilt
 3. **כל הסינון הספציפי לרעד נעשה בתוכנה!**
 4. **Zero-Phase filtering שומר על תזמון מדויק**
 

@@ -777,17 +777,19 @@ The experimental analyzer is a variant of the offline analyzer with **no pass/fa
 | Feature | `offline_analyzer.py` | `offline_analyzer_exp.py` |
 |---------|----------------------|--------------------------|
 | Frequency deviation | Pass/Fail (threshold 0.5 Hz) | Informational only (reported, no judgment) |
-| Peak SNR | Pass/Fail (threshold 6 dB) | Informational only (calculated, no threshold) |
+| Peak SNR | Pass/Fail (threshold 6 dB) | Not computed |
 | Energy metric | N/A | Dominant Power Ratio (DPR) |
-| Fig 2 | 3 subplots (raw, filtered, overlay) | 2 broader subplots (raw, filtered) |
+| Pipeline | Mean subtraction → Resultant → Bandpass on resultant | Bandpass per-axis → Resultant from filtered axes |
+| PSD source | On filtered resultant | On each filtered axis independently (dominant axis selected) |
+| Fig 2 | 3 subplots (raw, filtered, overlay) of resultant | 2 broader subplots of dominant axis (raw, filtered), 40-80s view |
 | Fig 3.3 | Standard metrics panel | Enlarged metrics panel with DPR |
 | Fig 4 | 3-second zoomed window (mid-recording) | 5-second zoomed window A (mid-recording) |
 | Fig 5 | N/A | 5-second zoomed window B (consecutive after A) |
-| Fig 6 | N/A | Full-width FFT magnitude (1-12 Hz) over full 120s |
+| Fig 6 | N/A | Full-width FFT magnitude of dominant axis (1-12 Hz) over full 120s |
 
 #### Signal Processing Pipeline
 
-The experimental analyzer follows the same core signal processing chain as the standard analyzer. Below is every step with the mathematical formulation and rationale.
+The experimental analyzer uses an **independent per-axis filtering** approach that differs from the standard analyzer. Instead of first removing DC via mean subtraction and then computing a resultant, it applies the bandpass filter directly to each raw axis — the bandpass inherently removes DC (gravity) since it has zero gain at 0 Hz. Below is every step with the mathematical formulation and rationale.
 
 ##### Step 1: CSV Parsing
 
@@ -800,39 +802,9 @@ Output: t[n], Ax[n], Ay[n], Az[n]   (N samples at 100 Hz)
 
 Timestamps are converted from milliseconds to seconds: `t[n] = Timestamp[n] / 1000`.
 
-##### Step 2: DC Offset Removal (Gravity Removal)
+##### Step 2: Butterworth Bandpass Filter (2-8 Hz) — Per Axis
 
-**What:** Subtract the mean of each axis from all samples on that axis.
-
-**Math:**
-
-```
-Ax_clean[n] = Ax[n] - (1/N) * SUM(Ax[k], k=0..N-1)
-Ay_clean[n] = Ay[n] - (1/N) * SUM(Ay[k], k=0..N-1)
-Az_clean[n] = Az[n] - (1/N) * SUM(Az[k], k=0..N-1)
-```
-
-**Why:** The accelerometer constantly measures gravitational acceleration (~9.8 m/s^2 on the downward axis) plus any sensor bias. Subtracting the per-axis mean removes this static component, leaving only the dynamic acceleration (vibration/tremor). This is equivalent to removing the DC component (0 Hz) from the signal in the frequency domain. Without this step, the large DC offset would dominate all subsequent analysis and mask the tremor signal.
-
-##### Step 3: Resultant Vector Magnitude
-
-**What:** Combine three orthogonal axes into a single scalar representing total vibration intensity.
-
-**Math:**
-
-```
-accel_mag[n] = sqrt( Ax_clean[n]^2 + Ay_clean[n]^2 + Az_clean[n]^2 )
-```
-
-This is the Euclidean norm (L2 norm) of the 3D acceleration vector at each time sample.
-
-**Why:** Tremor vibration may occur along any axis or combination of axes depending on sensor orientation. The resultant vector magnitude captures total vibration energy regardless of mounting angle. This makes the analysis orientation-independent — critical for real-world clinical use where sensor placement varies between subjects.
-
-**Note:** The magnitude is always >= 0 (it is a norm). This introduces a DC component that will be removed by the subsequent bandpass filter.
-
-##### Step 4: Butterworth Bandpass Filter (2-8 Hz)
-
-**What:** Apply a 4th-order Butterworth bandpass filter using zero-phase forward-backward filtering (filtfilt).
+**What:** Apply a 4th-order Butterworth bandpass filter to **each raw axis independently** using zero-phase forward-backward filtering (filtfilt). No prior DC removal (mean subtraction) is needed — the bandpass has zero gain at 0 Hz, so it inherently removes gravity and any sensor bias.
 
 **Math (filter design):**
 
@@ -841,15 +813,16 @@ Filter type:      Butterworth (maximally flat magnitude in passband)
 Order:            4 (per single pass)
 Passband:         [2 Hz, 8 Hz]
 Normalized cutoffs: [2/50, 8/50] = [0.04, 0.16]   (Nyquist = Fs/2 = 50 Hz)
+
+Ax_filt[n] = filtfilt(b, a, Ax[n])    # Filter raw Ax directly
+Ay_filt[n] = filtfilt(b, a, Ay[n])    # Filter raw Ay directly
+Az_filt[n] = filtfilt(b, a, Az[n])    # Filter raw Az directly
 ```
 
-The Butterworth transfer function for order N with cutoff wc:
-
-```
-|H(jw)|^2 = 1 / (1 + (w/wc)^(2N))
-```
-
-This provides maximally flat response in the passband (no ripple) and monotonic roll-off in the stopband.
+This single step accomplishes three things simultaneously:
+1. **Removes DC (gravity):** The bandpass has no gain at 0 Hz, so the constant gravity component is eliminated automatically
+2. **Removes high-frequency noise:** Everything above 8 Hz is attenuated
+3. **Handles wrist rotation correctly:** Slow orientation changes (< 2 Hz) are rejected by the filter, unlike mean subtraction which assumes constant gravity projection
 
 **filtfilt (zero-phase filtering):**
 
@@ -865,18 +838,37 @@ The signal is filtered forward, then the result is reversed and filtered again. 
 
 **Why 2-8 Hz instead of clinical 3-7 Hz?** The Butterworth filter has gradual roll-off at the cutoff frequencies. At the -3 dB points (2 and 8 Hz), the signal is attenuated by ~29%. With filtfilt the attenuation at cutoff doubles to -6 dB (~50%). By placing the filter edges at 2 and 8 Hz, the clinical tremor band of 3-7 Hz falls well within the passband where attenuation is negligible (< 0.1 dB).
 
-##### Step 5: Welch PSD (Power Spectral Density)
+##### Step 3: Resultant Vector from Filtered Axes
 
-**What:** Estimate the power spectrum using Welch's method (averaged periodograms of overlapping segments).
+**What:** Combine the three **filtered** axes into a single scalar representing total vibration intensity.
 
 **Math:**
 
 ```
-1. Divide signal x[n] (length N) into K overlapping segments of length L
-2. Apply Hann window w[n] to each segment: x_k[n] = x_k[n] * w[n]
-3. Compute DFT of each windowed segment: X_k[f] = FFT(x_k[n])
-4. Compute periodogram: P_k[f] = |X_k[f]|^2 / (Fs * SUM(w[n]^2))
-5. Average across segments: PSD[f] = (1/K) * SUM(P_k[f], k=1..K)
+result_filtered[n] = sqrt( Ax_filt[n]^2 + Ay_filt[n]^2 + Az_filt[n]^2 )
+```
+
+**Why after filtering (not before)?** The sqrt(x^2 + y^2 + z^2) operation is **nonlinear**. If applied to unfiltered data (which contains a large DC gravity offset), the nonlinearity distorts the signal and creates spurious frequency content. By filtering first, each axis is a clean zero-mean tremor oscillation, and the magnitude faithfully represents the 3D tremor envelope.
+
+**Note:** The resultant vector is used only for the time-domain RMS metric. All frequency-domain analysis (PSD, FFT) operates on individual filtered axes.
+
+##### Step 4: Welch PSD on Each Filtered Axis + Dominant Axis Selection
+
+**What:** Estimate the power spectrum of **each filtered axis independently** using Welch's method (averaged periodograms of overlapping segments), then select the **dominant axis** — whichever has the highest PSD peak in the 2-8 Hz band.
+
+**Math:**
+
+```
+# PSD on each filtered axis independently
+f, PSD_Ax = welch(Ax_filt, Fs, nperseg=L, noverlap=L/2)
+_, PSD_Ay = welch(Ay_filt, Fs, nperseg=L, noverlap=L/2)
+_, PSD_Az = welch(Az_filt, Fs, nperseg=L, noverlap=L/2)
+
+# Select dominant axis: whichever has the absolute max PSD peak in 2-8 Hz
+rest_mask = (f >= 2.0) AND (f <= 8.0)
+peaks = { X: max(PSD_Ax[rest_mask]), Y: max(PSD_Ay[rest_mask]), Z: max(PSD_Az[rest_mask]) }
+dominant_axis = argmax(peaks)          # e.g., 'Y'
+PSD_dominant = PSD_{dominant_axis}     # Use this axis for all freq-domain metrics
 ```
 
 **Parameters:**
@@ -889,42 +881,26 @@ Frequency resolution:   df = Fs / L = 100 / 400 = 0.25 Hz
 Number of segments (K): (12000 - 400) / 200 + 1 = 59 (for 120s recording)
 ```
 
-**Why Welch?** A single FFT periodogram of the full 120s signal has high variance (noisy estimate). Welch's method trades frequency resolution for reduced variance by averaging 59 periodograms. The 50% overlap with Hann windowing is the standard choice that provides ~62% variance reduction compared to a single periodogram.
+**Why PSD on individual axes (not on resultant)?** The resultant vector R = sqrt(x^2 + y^2 + z^2) is a **nonlinear** operation. Taking the PSD of R would introduce **frequency doubling artifacts** — spurious harmonics at 2x the true tremor frequency. By computing PSD on each linear (filtered) axis, we get a clean spectrum without mathematical distortion.
+
+**Why select one dominant axis?** The axis with the strongest PSD peak carries the clearest tremor signal. Using its PSD exclusively for frequency-domain metrics (dominant freq, DPR, peak PSD) ensures these metrics are not diluted by noise from weaker axes.
 
 **Output units:** (m/s^2)^2/Hz (power spectral density). Displayed in dB: `PSD_dB = 10 * log10(PSD)`.
 
-##### Step 6: Peak Detection in 2-8 Hz Band
+##### Step 5: Peak Detection in 2-8 Hz Band
 
-**What:** Find the dominant tremor frequency by locating the PSD maximum within the analysis band.
+**What:** Find the dominant tremor frequency by locating the PSD maximum of the **dominant axis** within the analysis band.
 
 **Math:**
 
 ```
 rest_mask = (freq >= 2.0 Hz) AND (freq <= 8.0 Hz)
-peak_idx  = argmax( PSD_filtered[rest_mask] )
+peak_idx  = argmax( PSD_dominant[rest_mask] )
 f_dominant = freq[rest_mask][peak_idx]
-PSD_peak   = PSD_filtered[rest_mask][peak_idx]
+PSD_peak   = PSD_dominant[rest_mask][peak_idx]
 ```
 
-**Why on filtered PSD?** The bandpass filter has already removed out-of-band energy. Using the filtered PSD ensures the peak detection is not influenced by spectral leakage from strong low-frequency or high-frequency components.
-
-##### Step 7: In-Band SNR (Peak Signal-to-Noise Ratio)
-
-**What:** Measure how prominent the dominant peak is relative to the noise floor within the 2-8 Hz band.
-
-**Math:**
-
-```
-noise_bins  = all PSD bins in 2-8 Hz, EXCLUDING peak and its +/-1 neighbors
-noise_floor = mean(PSD[noise_bins])
-SNR_dB      = 10 * log10( PSD_peak / noise_floor )
-```
-
-The +/-1 bin exclusion (3 bins total = 0.75 Hz) accounts for spectral leakage around the peak. Without this exclusion, leaked energy from the peak would inflate the noise floor estimate.
-
-**Why:** SNR tells you whether the peak is a real concentrated signal or just the tallest point in a flat noise spectrum. A high SNR (e.g., > 10 dB) means the peak stands well above the noise, indicating a genuine periodic signal. This metric is reported informational only (no threshold applied).
-
-##### Step 8: Dominant Power Ratio (DPR)
+##### Step 6: Dominant Power Ratio (DPR)
 
 **What:** The fraction of total in-band power that is concentrated in a small window around the dominant frequency (+/-1 bin = +/-0.25 Hz, i.e. 3 bins / 0.75 Hz wide).
 
@@ -943,11 +919,9 @@ Both numerator and denominator use trapezoidal integration (`np.trapz`), so both
 - **DPR close to 1.0 (100%)**: Nearly all energy is concentrated at a single frequency — strong, clean periodic signal
 - **DPR close to 0**: Energy is spread evenly across the band — no dominant frequency, noise-like signal
 
-DPR complements SNR: SNR measures peak-to-noise contrast, while DPR measures energy concentration. A signal can have high SNR but low DPR if there are multiple strong peaks in the band.
+##### Step 7: FFT Magnitude Spectrum (Full Recording)
 
-##### Step 9: FFT Magnitude Spectrum (Full Recording)
-
-**What:** Compute the discrete Fourier transform of the entire filtered signal and plot the magnitude spectrum.
+**What:** Compute the discrete Fourier transform of the **dominant filtered axis** over the full recording and plot the magnitude spectrum.
 
 **Math:**
 
@@ -967,9 +941,9 @@ df = Fs / N = 100 / 12000 = 0.00833 Hz
 
 **Note:** Only the one-sided spectrum (0 to Nyquist = 50 Hz) is computed using `np.fft.rfft` for real-valued input. The plot is zoomed to 1-12 Hz for focus on the tremor band.
 
-##### Step 10: Zoomed Time-Domain Analysis (Consecutive 5-Second Windows)
+##### Step 8: Zoomed Time-Domain Analysis (Consecutive 5-Second Windows)
 
-**What:** Extract two consecutive 5-second windows from the middle of the recording and analyze each.
+**What:** Extract two consecutive 5-second windows from the middle of the recording and analyze the **dominant axis** signal in each.
 
 **Window placement:**
 
@@ -1017,9 +991,9 @@ The envelope traces the instantaneous amplitude of the oscillation, showing ampl
 - Fig 1.1: Bode Magnitude — filter gain vs frequency for single-pass and filtfilt
 - Fig 1.2: Bode Phase — demonstrates filtfilt achieves zero phase
 
-**Figure 2 — Time Domain Analysis (2 broader subplots):**
-- Fig 2.1: Raw resultant vector magnitude over full recording, with RMS
-- Fig 2.2: Filtered resultant (2-8 Hz) with Hilbert envelope and RMS
+**Figure 2 — Dominant Axis Time Domain (2 broader subplots, 40-80s view):**
+- Fig 2.1: Dominant axis raw signal (DC-removed) with RMS in title
+- Fig 2.2: Dominant axis filtered (2-8 Hz) with Hilbert envelope
 
 **Figure 3 — Frequency Domain Analysis (3 subplots, enlarged metrics):**
 - Fig 3.1: PSD full range (0-20 Hz) — raw and filtered with peak marker
@@ -1027,15 +1001,15 @@ The envelope traces the instantaneous amplitude of the oscillation, showing ampl
 - Fig 3.3: Enlarged metrics panel — frequency info, DPR, SNR, amplitude metrics
 
 **Figure 4 — Zoomed 5s Window A (2 subplots):**
-- Fig 4.1: Filtered signal with Hilbert envelope, numbered cycle markers, frequency from zero-crossing count
-- Fig 4.2: Raw vs filtered overlay on the same window
+- Fig 4.1: Dominant axis filtered signal with Hilbert envelope, numbered cycle markers, frequency from zero-crossing count
+- Fig 4.2: Dominant axis raw vs filtered overlay on the same window
 
 **Figure 5 — Zoomed 5s Window B (2 subplots):**
 - Fig 5.1: Same as 4.1 but for the next consecutive 5 seconds
 - Fig 5.2: Same as 4.2 but for the next consecutive 5 seconds
 
 **Figure 6 — FFT Analysis (single full-width plot):**
-- FFT magnitude zoomed to 1-12 Hz, computed over the entire 120s recording, with PWM reference line and peak annotation
+- FFT magnitude of the dominant filtered axis, zoomed to 1-12 Hz, computed over the full 120s recording, with PWM reference line and peak annotation
 
 ---
 
