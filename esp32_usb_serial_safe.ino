@@ -17,6 +17,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <esp_task_wdt.h>
 
 // ================================================================
 // HARDWARE PINS
@@ -115,6 +116,7 @@ void setup() {
   // Sensor
   Wire.begin(21, 22);
   Wire.setClock(400000);
+  Wire.setTimeOut(10);  // 10ms I2C timeout — prevents infinite hang if SDA/SCL disconnects mid-read
   if (!initSensor()) {
     Serial.println("[ERROR] Sensor init failed!");
     showError("Sensor Error", "Check wiring");
@@ -122,6 +124,11 @@ void setup() {
   }
   Serial.println("[OK] Sensor ready");
   
+  // Hardware watchdog — reboots ESP32 if loop() hangs for >5 seconds
+  esp_task_wdt_init(5, true);   // 5-second timeout, auto-reboot on expiry
+  esp_task_wdt_add(NULL);        // Watch the main (loopTask) task
+  Serial.println("[OK] Watchdog armed (5s)");
+
   updateDisplay("READY", "Press button\nto start");
   Serial.println("SYSTEM_READY");
   Serial.println("\n[READY] Press button to start\n");
@@ -131,7 +138,8 @@ void setup() {
 // MAIN LOOP
 // ================================================================
 void loop() {
-  handleButton(); 
+  esp_task_wdt_reset();  // Pet the watchdog — proves loop() is alive
+  handleButton();
 
   switch (currentState) {
     case IDLE:
@@ -325,8 +333,9 @@ void resetSensor() {
   
   Wire.begin(21, 22);
   Wire.setClock(400000);
+  Wire.setTimeOut(10);  // Re-apply I2C timeout after bus reinit
   delay(50);
-  
+
   if (initSensor()) {
     Serial.println("[SUCCESS] Sensor reset OK");
     Serial.println("SENSOR_RESET_OK");

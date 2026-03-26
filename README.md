@@ -231,13 +231,29 @@ These offsets are in **m/s^2** — the Adafruit MPU6050 library converts raw LSB
 
 #### Sensor Safety
 
-The firmware monitors sensor health continuously:
+The firmware monitors sensor health continuously and has two system-level safety nets:
 
 | Check | Interval | Threshold | Action |
 |-------|----------|-----------|--------|
 | Stuck detection | Every sample | 15 identical readings (delta < 0.001 m/s^2) | Auto-reset sensor |
 | Read failure | Every sample | 5 consecutive failures | Auto-reset sensor |
 | Connection loss | Every 500 ms | I2C ACK missing or 2s since last read | Auto-reset sensor |
+| **I2C bus timeout** | **Every I2C transaction** | **10 ms** | **Unblocks Wire library, returns error** |
+| **Hardware watchdog (WDT)** | **Every loop() iteration** | **5 seconds** | **Auto-reboots ESP32** |
+
+##### I2C Bus Timeout (Wire.setTimeOut)
+
+The ESP32 `Wire` library can hang indefinitely if the I2C bus is disrupted mid-transaction (e.g., SDA or SCL wire disconnects while the MPU6050 is transmitting). In this scenario, `mpu.getEvent()` never returns, and all software-level safety checks (stuck detection, read failure counting, health checks) become unreachable.
+
+`Wire.setTimeOut(10)` sets a 10 ms hardware timeout on every I2C transaction. If any I2C read/write does not complete within 10 ms, the Wire library returns an error instead of blocking forever. This allows `mpu.getEvent()` to fail gracefully, which then triggers the existing `failedReads` counter and `resetSensor()` flow.
+
+**Why 10 ms:** A full MPU6050 I2C read at 400 kHz takes ~0.5 ms. 10 ms provides 20× headroom while staying under the 10 ms sample interval. The timeout is re-applied in `resetSensor()` after I2C bus reinitialization.
+
+##### Hardware Watchdog Timer (WDT)
+
+The ESP-IDF task watchdog provides a last line of defense against **any** hang — known or unknown. It is initialized in `setup()` with a 5-second timeout and the main task is registered. Every `loop()` iteration calls `esp_task_wdt_reset()` to "pet" the watchdog. If `loop()` fails to pet the watchdog for 5 consecutive seconds (due to any cause — I2C hang, USB buffer deadlock, memory corruption), the ESP32 automatically reboots and returns to `setup()`.
+
+**Why 5 seconds:** Long enough to accommodate worst-case normal operation (I2C timeout + sensor reset + display update ≈ 0.5s), short enough to limit data loss to at most 500 samples (5s × 100 Hz).
 
 ##### Stuck Detection — Rationale and Relationship to Sensor Noise Floor
 
@@ -265,7 +281,7 @@ Therefore, if readings are truly identical (delta < 0.001 m/s^2 on all axes) for
 
 **Relationship to the ±2g range:** The ±2g range (±19.6 m/s^2) provides the highest ADC resolution (16384 LSB/g), which maximizes sensitivity for small tremor amplitudes (typical Parkinsonian tremor: 0.1–2.0 m/s^2). The tradeoff is that the ±2g range also has the lowest output noise in absolute terms (~0.098 m/s^2), but this is still nearly 100× above the stuck threshold — so the detection remains reliable. At wider ranges (±4g, ±8g, ±16g) the noise floor increases further, making stuck detection even easier, but at the cost of reduced tremor sensitivity.
 
-Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz, reinitialize MPU6050.
+Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz with 10 ms timeout, wait 50 ms, reinitialize MPU6050.
 
 #### State Machine
 
