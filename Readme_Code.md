@@ -1,9 +1,9 @@
 # Code Reference - Parkinson's Rest Tremor Detection System
 
-## esp32_usb_serial_safe_V3.ino
-Runs on the ESP32 microcontroller using **dual-core FreeRTOS** architecture. Core 1 runs a dedicated high-priority sampler task that reads the MPU6050 at 100 Hz with drift-free `vTaskDelayUntil` timing and outputs CSV over USB Serial. Core 0 runs the main loop handling the FSM (IDLE/RECORDING/PAUSED/WAITING_NEXT/FINISHED), OLED display updates, LED blinking, and button input. This separation ensures that the ~23 ms OLED I2C transfer never blocks sensor sampling.
-Safety features: stuck-sensor detection (15 identical reads), I2C read failure counting (5 max), I2C health check (every 500 ms, on Core 1 — no cross-core bus contention), `Wire.setTimeOut(10)` to prevent I2C hangs, and a 5-second hardware watchdog (WDT) that auto-reboots on any hang. Reports `MISSED,<count>` at cycle end for sample loss tracking.
-Output: streams CSV lines (`Timestamp,Ax,Ay,Az`) and control events (`START_RECORDING`, `CYCLE,n`, `PAUSE_CYCLE`, `RESUME_CYCLE`, `END_RECORDING`, `ALL_COMPLETE`, `MISSED,n`, error flags) over USB Serial at 115200 baud.
+## esp32_usb_serial_safe_V2.ino
+Runs on the ESP32 microcontroller. Reads MPU6050 accelerometer data at 100 Hz via polled `millis()` timing, manages recording cycles (start/pause/resume/stop) via a physical button and FSM (IDLE/RECORDING/PAUSED/WAITING_NEXT/FINISHED), and detects sensor faults with automatic reset.
+Safety features: stuck-sensor detection (15 identical reads), I2C read failure counting (5 max), I2C health check (every 500 ms), `Wire.setTimeOut(10)` to prevent I2C bus hangs, and a 5-second hardware watchdog (WDT) that auto-reboots on any hang. SSD1306 OLED display shows cycle status and countdown. LED indicators for state feedback.
+Output: streams CSV lines (`Timestamp,Ax,Ay,Az`) and control events (`START_RECORDING`, `CYCLE,n`, `PAUSE_CYCLE`, `RESUME_CYCLE`, `END_RECORDING`, `ALL_COMPLETE`, error flags) over USB Serial at 115200 baud.
 
 ## rpi_usb_recorder_v2.py
 Runs on the Raspberry Pi. Listens on the USB serial port, parses the ESP32 event stream, and saves accelerometer data into per-cycle CSV files with metadata headers and per-cycle log files.

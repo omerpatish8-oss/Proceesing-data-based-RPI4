@@ -52,7 +52,7 @@
 | מלבן | תפקיד | כיוון מידע |
 |-------|--------|-----------|
 | MPU6050 | דגימת תאוצה תלת-צירית, 100Hz, +/-2G | חיישן → ESP32 (I2C) |
-| ESP32 | דגימה (Core 1), כיול offset, ניהול הקלטה FSM + UI (Core 0), שידור CSV | ESP32 → RPi (USB-UART) |
+| ESP32 | דגימה, כיול offset, ניהול הקלטה (FSM), שידור CSV | ESP32 → RPi (USB-UART) |
 | RPI 4 | קליטה, שמירה לCSV, הפעלת DSP, ויזואליזציה | מקבל מESP32, שולט במנוע |
 | L298N | דרייבר מנוע - מגשר בין GPIO 3.3V לוגי למנוע 12V | RPi → מנוע |
 | מנוע DC | מייצר רעד מכני מבוקר בתדר ידוע | פלט פיזי → נמדד ע"י MPU6050 |
@@ -61,7 +61,7 @@
 
 ## שקף 4 - מכלול הרכישה: ESP32 + MPU6050 + ממשק משתמש
 
-> **קובץ קוד**: `esp32_usb_serial_safe_V3.ino`
+> **קובץ קוד**: `esp32_usb_serial_safe_V2.ino`
 
 ### חיישן MPU6050
 - חיישן תאוצה MEMS תלת-צירי + ADC מובנה 16-bit לכל ציר
@@ -72,12 +72,9 @@
 - **[Datasheet](https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf)**
 
 ### בקר ESP32 DevKit V1
-- מעבד: Xtensa **Dual-Core** 240 MHz, 32-bit
+- מעבד: Xtensa Dual-Core 240 MHz, 32-bit
 - זיכרון: 520KB SRAM
-- **ארכיטקטורה V3 - חלוקת ליבות:**
-  - **Core 1**: משימת דגימה ייעודית (FreeRTOS task, עדיפות 5) — I2C חיישן + שידור CSV
-  - **Core 0**: לולאה ראשית — כפתור, מסך OLED, LEDs, מכונת מצבים
-- **למה חלוקה?** עדכון מסך OLED חוסם ~23ms (2+ דגימות). בV2 זה גרם לאיבוד ~300 דגימות/מחזור. בV3 הדגימה לא מושפעת מהמסך.
+- תפקיד: דוגם את החיישן ב-I2C, שולח CSV ב-USB Serial
 - **[Datasheet](https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf)**
 
 ### ממשק משתמש על הבקר
@@ -88,17 +85,13 @@
 | LED ירוק | GPIO 15, נגד 220Ω | חיווי: מוכן (הבהוב 1Hz), הקלטה (הבהוב 200ms) |
 | LED אדום | GPIO 2, נגד 220Ω | חיווי: השהייה/שגיאה (הבהוב) |
 
-### מכונת מצבים (FSM) — V3 Dual-Core
+### מכונת מצבים (FSM)
 ```
-Core 0 (מעברי מצב, UI):
 IDLE ──[לחצן]──→ RECORDING ──[לחצן]──→ PAUSED ──[לחצן]──→ RECORDING
                      │                                         │
                      └──[2 דקות]──→ END ──→ WAITING_NEXT ──→ RECORDING (סבב 2)
                                                                 │
                                                           └──[2 דקות]──→ FINISHED
-
-Core 1 (דגימה):
-  רץ כל 10ms (vTaskDelayUntil). דוגם רק כש-state == RECORDING.
 ```
 
 ---
@@ -280,11 +273,11 @@ L298N OUT1         → מנוע DC (+)
 L298N OUT2         → מנוע DC (-)
 ```
 
-### הערה חשובה על ה-I2C וחלוקת ליבות
-- ה-ESP32 משתמש ב**שני buses של I2C**, כל אחד ייעודי לליבה:
-  - `Wire` (GPIO 21/22) → MPU6050 — **Core 1 בלבד** (משימת דגימה)
-  - `Wire1` (GPIO 18/19) → OLED — **Core 0 בלבד** (לולאה ראשית)
-- זה מונע התנגשויות כתובות **ומאפשר דגימה ועדכון מסך במקביל ללא חסימה**
+### הערה חשובה על ה-I2C
+- ה-ESP32 משתמש ב**שני buses של I2C**:
+  - `Wire` (ברירת מחדל): GPIO 21/22 → MPU6050
+  - `Wire1` (שני): GPIO 18/19 → OLED
+- זה מונע התנגשויות כתובות ומאפשר תקשורת מקבילית
 
 ---
 
@@ -435,34 +428,32 @@ a(f) = F / M_total = 0.0236·f² / 0.65 = 0.04·f²  [m/s²]
 
 ## שקף 14 - תרשימי זרימה
 
-### מערכת הרכישה (ESP32) — V3 Dual-Core
+### מערכת הרכישה (ESP32)
 ```
-[התחלה] → אתחול חיישן/מסך/LEDs/Watchdog
-        → הפעלת samplerTask על Core 1
-        → [IDLE - ממתין ללחצן]
-
-Core 0 (UI + FSM):                    Core 1 (דגימה):
-─────────────────                      ─────────────────
-[לחיצה]                               [רץ כל 10ms]
-    ▼                                      │
-שליחת START_RECORDING                 state==RECORDING?
-שליחת CYCLE,N + Header                    │
-    ▼                                  כן → sampleSensor()
-┌──── [RECORDING] ◄────┐                    + checkSensor (כל 500ms)
-│   עדכון מסך כל 1s    │                    + שידור CSV
-│   הבהוב LED          │              לא → sleep 10ms
-│         │            │
-│    [לחיצה]      [RESUME]
-│         ▼            │
-│     [PAUSED] ────────┘
-│
-└──[2 דקות]──→ END_RECORDING + MISSED,N
-                        │
-               [עוד סבב?]
-                /        \
-              כן          לא
-              ▼            ▼
-        WAITING_NEXT   ALL_COMPLETE
+[התחלה] → אתחול חיישן/מסך/LEDs → [IDLE - ממתין ללחצן]
+                                        │
+                                   [לחיצה]
+                                        ▼
+                              שליחת START_RECORDING
+                              שליחת CYCLE,N + Header
+                                        │
+                                        ▼
+                              ┌──── [RECORDING] ◄────┐
+                              │   דגימה כל 10ms      │
+                              │   בדיקת stuck sensor │
+                              │   עדכון מסך כל 1s    │
+                              │         │            │
+                              │    [לחיצה]      [RESUME]
+                              │         ▼            │
+                              │     [PAUSED] ────────┘
+                              │
+                              └──[2 דקות]──→ END_RECORDING
+                                                  │
+                                         [עוד סבב?]
+                                          /        \
+                                        כן          לא
+                                        ▼            ▼
+                                  WAITING_NEXT   ALL_COMPLETE
 ```
 
 ### מערכת העיבוד (RPi)
@@ -491,8 +482,7 @@ Core 0 (UI + FSM):                    Core 1 (דגימה):
 | צימוד מכני - רעשים | הצמדת חיישן לכף היד + וקטור שקול |
 | DC offset מכבידה | כיול סטטי + DC Removal בעיבוד |
 | Phase shift במסנן | שימוש ב-filtfilt (zero-phase, offline only) |
-| **איבוד ~300 דגימות/מחזור** | **V3: חלוקת ליבות — דגימה על Core 1, מסך על Core 0** |
-| **I2C hang אינסופי** | **Wire.setTimeOut(10ms) + watchdog 5s** |
+| I2C hang אינסופי | Wire.setTimeOut(10ms) + watchdog 5s |
 
 ---
 
