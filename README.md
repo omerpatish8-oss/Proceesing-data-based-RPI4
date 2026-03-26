@@ -30,7 +30,7 @@ A complete data acquisition and signal processing pipeline for detecting and val
 
 | Script | Runs On | Role |
 |--------|---------|------|
-| `esp32_usb_serial_safe_V2.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
+| `esp32_usb_serial_safe_V3.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
 | `rpi_usb_recorder_v2.py` | RPI 4 | Receives UART data, validates, writes CSV files |
 | `motor_control.py` | RPI 4 | Controls DC motor via L298N driver (PWM on GPIO18) |
 | `offline_analyzer.py` | PC/RPI 4 | Signal processing, PSD analysis, input-output validation |
@@ -182,7 +182,26 @@ Debounce: FW uses 500 ms software debounce (lastDebounceTime check)
 
 ## Pipeline Walkthrough
 
-### Stage 1: Sensor Acquisition (`esp32_usb_serial_safe_V2.ino`)
+### Stage 1: Sensor Acquisition (`esp32_usb_serial_safe_V3.ino`)
+
+#### Dual-Core Architecture
+
+The ESP32 has two CPU cores. V3 separates real-time sampling from UI to eliminate missed samples:
+
+| Core | Task | Priority | Responsibilities |
+|------|------|----------|------------------|
+| **Core 1** | `samplerTask` | 5 (high) | Sensor I2C read, stuck detection, health check, CSV Serial output |
+| **Core 0** | `loop` (default) | 1 (normal) | Button handling, OLED display, LED blinking, FSM transitions |
+
+**Why this matters:** The OLED display update (`display.display()`) pushes 1024 bytes over I2C and blocks for ~23 ms — more than two sample intervals. In V2, this ran on the same core as sampling, causing ~300 missed samples per 120s recording. In V3, the display runs on Core 0 while sampling runs uninterrupted on Core 1.
+
+**I2C bus isolation:**
+- `Wire` (GPIO 21/22) → MPU6050 — used **exclusively** by Core 1 sampler task
+- `Wire1` (GPIO 18/19) → OLED display — used **exclusively** by Core 0 loop
+
+**Timing:** `vTaskDelayUntil()` provides drift-free 10 ms intervals. Unlike `millis()` polling (which accumulates lateness), `vTaskDelayUntil` compensates for task execution time automatically.
+
+**Missed sample tracking:** The firmware reports `MISSED,<count>` at the end of each cycle. This counter is expected to be 0 under normal operation.
 
 #### Sampling
 
@@ -251,9 +270,9 @@ The ESP32 `Wire` library can hang indefinitely if the I2C bus is disrupted mid-t
 
 ##### Hardware Watchdog Timer (WDT)
 
-The ESP-IDF task watchdog provides a last line of defense against **any** hang — known or unknown. It is initialized in `setup()` with a 5-second timeout and the main task is registered. Every `loop()` iteration calls `esp_task_wdt_reset()` to "pet" the watchdog. If `loop()` fails to pet the watchdog for 5 consecutive seconds (due to any cause — I2C hang, USB buffer deadlock, memory corruption), the ESP32 automatically reboots and returns to `setup()`.
+The ESP-IDF task watchdog provides a last line of defense against **any** hang — known or unknown. It is initialized in `setup()` with a 5-second timeout and the Core 0 loop task is registered. Every `loop()` iteration calls `esp_task_wdt_reset()` to "pet" the watchdog. If `loop()` fails to pet the watchdog for 5 consecutive seconds (due to any cause — USB buffer deadlock, memory corruption, unexpected block), the ESP32 automatically reboots and returns to `setup()`.
 
-**Why 5 seconds:** Long enough to accommodate worst-case normal operation (I2C timeout + sensor reset + display update ≈ 0.5s), short enough to limit data loss to at most 500 samples (5s × 100 Hz).
+**Why 5 seconds:** Long enough to accommodate worst-case normal operation (display update + button debounce ≈ 0.5s), short enough to limit data loss to at most 500 samples (5s × 100 Hz).
 
 ##### Stuck Detection — Rationale and Relationship to Sensor Noise Floor
 
@@ -286,6 +305,8 @@ Reset procedure: close I2C bus, wait 150 ms, reinitialize I2C at 400 kHz with 10
 #### State Machine
 
 ```
+Core 0 (FSM transitions):
+
 IDLE ──[button]──→ RECORDING ──[button]──→ PAUSED ──[button]──→ RECORDING
                        │                                            │
                        └──────[120s elapsed]──→ WAITING_NEXT ──[button]──→ RECORDING
@@ -294,6 +315,10 @@ IDLE ──[button]──→ RECORDING ──[button]──→ PAUSED ──[but
                                                      │
                                                      ▼
                                                   FINISHED
+
+Core 1 (sampler task):
+  Runs continuously. Checks currentState each 10ms tick.
+  Only samples when state == RECORDING; sleeps otherwise.
 ```
 
 - **Recording duration**: 120 seconds per cycle (configurable via `TARGET_DURATION`)
