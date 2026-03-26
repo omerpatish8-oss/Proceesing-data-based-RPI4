@@ -125,8 +125,13 @@ void setup() {
   Serial.println("[OK] Sensor ready");
   
   // Hardware watchdog — reboots ESP32 if loop() hangs for >5 seconds
-  esp_task_wdt_init(5, true);   // 5-second timeout, auto-reboot on expiry
-  esp_task_wdt_add(NULL);        // Watch the main (loopTask) task
+  const esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 5000,             // 5-second timeout
+    .idle_core_mask = 0,            // Don't watch idle tasks
+    .trigger_panic = true           // Auto-reboot on expiry
+  };
+  esp_task_wdt_init(&wdt_config);   // Initialize with config struct (ESP-IDF v5.x API)
+  esp_task_wdt_add(NULL);           // Watch the main (loopTask) task
   Serial.println("[OK] Watchdog armed (5s)");
 
   updateDisplay("READY", "Press button\nto start");
@@ -208,7 +213,7 @@ void loop() {
       
     case FINISHED:
       digitalWrite(PIN_GREEN, HIGH);
-      digitalWrite(PIN_RED, LOW);11
+      digitalWrite(PIN_RED, LOW);
       break;
   }
 }
