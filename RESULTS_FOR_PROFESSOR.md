@@ -502,7 +502,7 @@ The tremor analysis system has successfully:
 
 2. **Analysis Software:**
    - `offline_analyzer.py` (v3.2 - MATLAB-style interface)
-   - `esp32_usb_serial_safe.ino` (ESP32 firmware)
+   - `esp32_usb_serial_safe_V2.ino` (ESP32 firmware)
 
 3. **Documentation:**
    - `SIGNAL_PROCESSING_CHAIN.md` (Detailed processing explanation)

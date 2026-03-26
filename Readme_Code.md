@@ -1,6 +1,6 @@
 # Code Reference - Parkinson's Rest Tremor Detection System
 
-## esp32_usb_serial_safe.ino
+## esp32_usb_serial_safe_V2.ino
 Runs on the ESP32 microcontroller. Reads MPU6050 accelerometer data at 100 Hz, manages recording cycles (start/pause/resume/stop) via a physical button, and detects sensor faults (stuck readings, connection loss) with automatic reset.
 Main components: MPU6050 sensor interface, state machine (IDLE/RECORDING/PAUSED/WAITING_NEXT/FINISHED), stuck-sensor detection, SSD1306 OLED display, LED status indicators, and USB Serial output at 115200 baud.
 Output: streams CSV lines (`Timestamp,Ax,Ay,Az`) and control events (`START_RECORDING`, `CYCLE,n`, `PAUSE_CYCLE`, `RESUME_CYCLE`, `END_RECORDING`, `ALL_COMPLETE`, error flags) over USB Serial to the Raspberry Pi.

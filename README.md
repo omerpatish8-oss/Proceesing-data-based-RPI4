@@ -30,7 +30,7 @@ A complete data acquisition and signal processing pipeline for detecting and val
 
 | Script | Runs On | Role |
 |--------|---------|------|
-| `esp32_usb_serial_safe.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
+| `esp32_usb_serial_safe_V2.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
 | `rpi_usb_recorder_v2.py` | RPI 4 | Receives UART data, validates, writes CSV files |
 | `motor_control.py` | RPI 4 | Controls DC motor via L298N driver (PWM on GPIO18) |
 | `offline_analyzer.py` | PC/RPI 4 | Signal processing, PSD analysis, input-output validation |
@@ -182,7 +182,7 @@ Debounce: FW uses 500 ms software debounce (lastDebounceTime check)
 
 ## Pipeline Walkthrough
 
-### Stage 1: Sensor Acquisition (`esp32_usb_serial_safe.ino`)
+### Stage 1: Sensor Acquisition (`esp32_usb_serial_safe_V2.ino`)
 
 #### Sampling
 

@@ -35,7 +35,7 @@
 ### **MPU6050 Configuration:**
 
 ```cpp
-// File: esp32_usb_serial_safe.ino
+// File: esp32_usb_serial_safe_V2.ino
 
 // Measurement range (accelerometer only — no gyroscope used)
 mpu.setAccelerometerRange(MPU6050_RANGE_2_G);      // ±2g
