@@ -5,8 +5,9 @@
  * V3 changes from V2:
  * - Sampling runs on a dedicated FreeRTOS task pinned to Core 1
  * - vTaskDelayUntil provides drift-free 10ms intervals
+ * - Sampler computes its own timestamp (no cross-core race)
  * - OLED display, LED, button handling run on Core 0 (loop)
- * - Missed sample counter tracks any overruns
+ * - Missed sample counter tracks overruns (flag-based detection)
  * - I2C sensor bus (Wire) is used exclusively by the sampler task
  * - Health check moved into sampler task (no cross-core I2C contention)
  *
@@ -49,7 +50,10 @@ enum State { IDLE, RECORDING, PAUSED, WAITING_NEXT, FINISHED };
 volatile State currentState = IDLE;
 volatile int currentCycle = 0;
 
-// Stopwatch-style timing (written by Core 0, read by Core 1)
+// Stopwatch-style timing
+// segmentStartTime, accumulatedTime: written by Core 0 only
+// currentTotalTime: written by Core 0 (for display), also computed
+//   independently by Core 1 (for CSV timestamps) to avoid race
 volatile unsigned long segmentStartTime = 0;
 volatile unsigned long accumulatedTime = 0;
 volatile unsigned long currentTotalTime = 0;
@@ -64,6 +68,9 @@ unsigned long lastSuccessfulRead = 0;
 volatile unsigned long sensorResets = 0;
 volatile unsigned long missedSamples = 0;
 
+// Flag for sampler overrun detection (set by ISR-like check in sampler)
+volatile bool samplePending = false;
+
 const int MAX_STUCK = 15;
 const int MAX_FAILED = 5;
 const float STUCK_THRESHOLD = 0.001;
@@ -77,7 +84,8 @@ const float aZ_off = 1.046231;
 // UI TIMERS (Core 0 only)
 // ================================================================
 unsigned long lastScreenUpdate = 0;
-unsigned long lastLedBlink = 0;
+unsigned long lastGreenBlink = 0;
+unsigned long lastRedBlink = 0;
 unsigned long lastDebounceTime = 0;
 
 // ================================================================
@@ -121,14 +129,14 @@ void setup() {
   }
   Serial.println("[OK] Sensor ready");
 
-  // Hardware watchdog (watches Core 0 loop task)
+  // Hardware watchdog — reconfigure the existing TWDT (Arduino pre-initializes it)
   const esp_task_wdt_config_t wdt_config = {
     .timeout_ms = 5000,
     .idle_core_mask = 0,
     .trigger_panic = true
   };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
+  esp_task_wdt_reconfigure(&wdt_config);
+  esp_task_wdt_add(NULL);  // Watch the Core 0 loop task
   Serial.println("[OK] Watchdog armed (5s)");
 
   // Launch sampler task on Core 1
@@ -156,15 +164,25 @@ void samplerTask(void *param) {
 
   while (true) {
     if (currentState == RECORDING) {
-      sampleSensor();
+      // Overrun detection: if samplePending is still true, we missed servicing it
+      if (samplePending) {
+        missedSamples++;
+      }
+      samplePending = true;
 
-      // Health check every 500ms (runs on same core as sensor — no I2C contention)
+      sampleSensor();
+      samplePending = false;
+
+      // Health check every 500ms (same core as sensor — no I2C contention)
       if (millis() - lastHealthCheck >= 500) {
         lastHealthCheck = millis();
         if (!checkSensor()) {
           Serial.println("[ERROR] Sensor lost connection!");
           Serial.println("ERROR_SENSOR_LOST");
           resetSensor();
+          // Reset timing after sensor reset delays (150+50ms)
+          // so vTaskDelayUntil doesn't try to "catch up"
+          lastWake = xTaskGetTickCount();
         }
       }
     }
@@ -183,12 +201,12 @@ void loop() {
 
   switch (currentState) {
     case IDLE:
-      blinkLed(PIN_GREEN, 1000);
+      blinkGreen(1000);
       break;
 
     case RECORDING:
       currentTotalTime = accumulatedTime + (millis() - segmentStartTime);
-      blinkLed(PIN_GREEN, 200);
+      blinkGreen(200);
       updateScreenPeriodic(false);
       if (currentTotalTime >= TARGET_DURATION) {
         stopRecording();
@@ -196,13 +214,13 @@ void loop() {
       break;
 
     case PAUSED:
-      blinkLed(PIN_RED, 800);
+      blinkRed(800);
       digitalWrite(PIN_GREEN, LOW);
       updateScreenPeriodic(true);
       break;
 
     case WAITING_NEXT:
-      blinkLed(PIN_RED, 500);
+      blinkRed(500);
       break;
 
     case FINISHED:
@@ -216,10 +234,17 @@ void loop() {
 // UI HELPERS (Core 0 only)
 // ================================================================
 
-void blinkLed(int pin, unsigned long interval) {
-  if (millis() - lastLedBlink >= interval) {
-    lastLedBlink = millis();
-    digitalWrite(pin, !digitalRead(pin));
+void blinkGreen(unsigned long interval) {
+  if (millis() - lastGreenBlink >= interval) {
+    lastGreenBlink = millis();
+    digitalWrite(PIN_GREEN, !digitalRead(PIN_GREEN));
+  }
+}
+
+void blinkRed(unsigned long interval) {
+  if (millis() - lastRedBlink >= interval) {
+    lastRedBlink = millis();
+    digitalWrite(PIN_RED, !digitalRead(PIN_RED));
   }
 }
 
@@ -317,7 +342,10 @@ void sampleSensor() {
   lastAy = ay;
   lastAz = az;
 
-  Serial.printf("%lu,%.3f,%.3f,%.3f\n", currentTotalTime, ax, ay, az);
+  // Compute timestamp locally on Core 1 (avoids race with Core 0)
+  unsigned long ts = accumulatedTime + (millis() - segmentStartTime);
+
+  Serial.printf("%lu,%.3f,%.3f,%.3f\n", ts, ax, ay, az);
 }
 
 void resetSensor() {
@@ -349,6 +377,7 @@ void startRecording() {
   accumulatedTime = 0;
   currentTotalTime = 0;
   missedSamples = 0;
+  samplePending = false;
 
   digitalWrite(PIN_RED, LOW);
   digitalWrite(PIN_GREEN, LOW);
