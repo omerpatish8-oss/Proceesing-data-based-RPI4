@@ -1,6 +1,6 @@
 # Tremor Data Acquisition System - RPI4 & ESP32
 
-A robust data acquisition system for capturing and analyzing tremor/motion data using Raspberry Pi 4 and ESP32 with MPU6050 sensor. Designed for medical research and Parkinson's disease tremor analysis.
+A data acquisition system for capturing and analyzing rest tremor (3-7 Hz) data using Raspberry Pi 4 and ESP32 with MPU6050 sensor. Designed for Parkinson's disease rest tremor detection and validation.
 
 ---
 
@@ -18,6 +18,8 @@ This system enables:
 ## 🔧 Hardware Requirements
 
 ### Components
+
+**Data Acquisition System:**
 - **Raspberry Pi 4** (data recorder and processor)
 - **ESP32 Development Board** (sensor interface)
 - **MPU6050** IMU sensor (accelerometer + gyroscope)
@@ -25,6 +27,12 @@ This system enables:
 - **Push Button** (for start/pause/resume control)
 - **LEDs** (Green and Red for status indication)
 - **USB Cable** (ESP32 to RPI4 connection)
+
+**Tremor Simulation System (Optional - for validation):**
+- **L298N Motor Driver** (H-bridge motor controller)
+- **DC Motor** (12V, for generating controlled oscillations)
+- **12V Power Supply** (for motor driver)
+- **Wiring:** GPIO connections from RPI4 to L298N
 
 ### Wiring (ESP32)
 ```
@@ -44,6 +52,13 @@ Control:
   - Button → GPIO 13 (with internal pull-up)
   - Green LED → GPIO 15
   - Red LED → GPIO 2
+
+L298N Motor Driver (Optional - Raspberry Pi 4):
+  - ENA (PWM) → GPIO 18
+  - IN1 → GPIO 23
+  - IN2 → GPIO 24
+  - 12V supply → External power
+  - Motor → OUT1/OUT2
 ```
 
 ---
@@ -916,13 +931,95 @@ Timestamp,Ax,Ay,Az,Gx,Gy,Gz
 
 ---
 
-## 🔍 Data Analysis
+## Algorithm Validation with Motor Simulation
 
-### Offline Tremor Analyzer (`offline_analyzer.py`)
+### Duty Cycle Motor Control (`motor_control.py`)
+
+The system includes a DC motor with eccentric mass for generating controlled vibrations at known frequencies. The motor is controlled via PWM duty cycle.
+
+#### Hardware Setup
+
+**L298N Motor Driver Configuration:**
+```
+RPI4 GPIO -> L298N:
+  - GPIO 18 -> ENA (PWM speed control)
+  - GPIO 23 -> IN1 (direction control)
+  - GPIO 24 -> IN2 (direction control)
+  - 12V external supply -> Motor power
+```
+
+**Motor Specifications:**
+- 12V DC motor, 625 RPM max (10.42 Hz)
+- Eccentric mass: 40g at 1.5 cm from rotation axis
+- PWM carrier frequency: 1 kHz
+- Minimum duty cycle: 15% (motor start threshold)
+
+**Duty Cycle to Frequency Mapping:**
+```
+Duty Cycle -> Voltage -> RPM   -> Frequency
+  20%       -> 2.4V   -> ~125  -> ~2.1 Hz
+  40%       -> 4.8V   -> ~250  -> ~4.2 Hz
+  60%       -> 7.2V   -> ~375  -> ~6.3 Hz
+  80%       -> 9.6V   -> ~500  -> ~8.3 Hz
+ 100%       -> 12V    -> ~625  -> ~10.4 Hz
+```
+
+**Measurement Setup:**
+- **Option 1 (Ground Truth):** MPU6050 attached directly to motor
+- **Option 2 (Realistic):** Hand holds motor, MPU6050 on finger
+
+#### Running Motor Control
+
+```bash
+python3 motor_control.py
+
+# Interactive menu:
+#   - Enter duty cycle (0-100%)
+#   - Motor runs continuously at that speed
+#   - Change duty cycle anytime
+#   - Enter 0 or 'q' to stop
+```
+
+#### Complete Validation Workflow
+
+**Step 1: Start Motor at Known Duty Cycle**
+```bash
+cd /path/to/Proceesing-data-based-RPI4
+python3 motor_control.py
+# Set duty cycle (e.g., 40% -> ~4.2 Hz, within rest tremor band)
+```
+
+**Step 2: Record Data with ESP32**
+```bash
+# In separate terminal
+python3 rpi_usb_recorder_v2.py
+# Press button on ESP32 to start recording
+# Motor vibrates at controlled frequency
+```
+
+**Step 3: Analyze with Input-Output Validation**
+```bash
+python3 offline_analyzer.py
+# Load the CSV file from tremor_data/
+# Enter expected frequency range (e.g., 3.5-5.0 Hz)
+# System checks if PSD peak falls within your expected range
+```
+
+**Step 4: Validate Results**
+- Verify PSD peak frequency matches motor frequency
+- Check PASS/FAIL validation result
+- Compare expected vs measured frequency (tolerance: +/-0.5 Hz)
+- Document results for validation report
+
+---
+
+## Data Analysis
+
+### Offline Rest Tremor Analyzer (`offline_analyzer.py`)
 
 **Research-Based Signal Processing Tool**
 
-The offline analyzer implements clinically-validated methods for Parkinson's disease tremor detection, based on peer-reviewed research using MPU6050 sensors and ESP32 hardware.
+The offline analyzer focuses on **rest tremor detection (3-7 Hz)** using a single Butterworth bandpass filter and input-output validation. Based on peer-reviewed research using MPU6050 sensors and ESP32 hardware.
 
 #### Scientific Foundation
 
@@ -934,74 +1031,52 @@ The offline analyzer implements clinically-validated methods for Parkinson's dis
 
 **Signal Processing Approach:**
 - **Accelerometer Focus**: Gyroscope data excluded (motor artifact concerns in motor-holding tests)
-- **Dual Perspective**: Both dominant axis analysis AND resultant vector magnitude
-- **Automatic Axis Detection**: Identifies highest energy axis (X, Y, or Z) automatically
-- **Dual-Band Filtering**: Separates rest tremor (3-7 Hz) from essential tremor (6-12 Hz)
-- **Butterworth Order 4**: Research-validated filter design with zero-phase distortion
-- **Resultant Vector**: Magnitude `√(Ax² + Ay² + Az²)` after gravity removal
-- **Clinical Features**: Mean amplitude, RMS, maximum amplitude, spectral power per band
+- **Resultant Vector**: Magnitude `sqrt(Ax^2 + Ay^2 + Az^2)` after gravity removal per axis
+- **Single Bandpass Filter**: 2-8 Hz Butterworth order 4 (extended from clinical 3-7 Hz to avoid -3dB edge attenuation)
+- **Zero-Phase Filtering**: Forward-backward (`filtfilt`) for no phase distortion
+- **PSD Analysis**: Welch method (4s window, 50% overlap), peak detection on filtered PSD within 3-7 Hz
 
-#### Tremor Classification
+#### Input-Output Validation
 
-**Rest Tremor (3-7 Hz) - Parkinsonian Type:**
-- Occurs at rest (seated, motor-holding test)
-- Frequency range: 3-7 Hz (extended from typical 4-6 Hz per research)
-- Characteristic of Parkinson's disease
-- Reduces with voluntary movement
+Instead of automated classification, the system uses an **input-output validation** approach:
 
-**Essential Tremor (6-12 Hz) - Postural Type:**
-- Occurs during postural holding
-- Frequency range: 6-12 Hz
-- Higher frequency than rest tremor
-- Intensifies with sustained posture
+1. User enters expected frequency range (e.g., motor set to 4-5 Hz)
+2. System computes PSD and finds dominant peak within 3-7 Hz
+3. System checks if measured peak falls within expected range (+/-0.5 Hz tolerance)
+4. Reports PASS or FAIL with measured vs expected values
 
-**Automated Classification:**
-```python
-power_ratio = rest_power / essential_power
-if power_ratio > 2.0:    # Rest tremor dominant
-    tremor_type = "Rest Tremor (Parkinsonian)"
-    confidence = "High"
-elif power_ratio < 0.5:  # Essential tremor dominant
-    tremor_type = "Essential Tremor (Postural)"
-    confidence = "High"
-else:                    # Mixed pattern
-    tremor_type = "Mixed Tremor"
-    confidence = "Moderate"
+```
+Validation Logic:
+  - User input: expected_low = 4.0 Hz, expected_high = 5.0 Hz
+  - System measures: PSD peak = 4.3 Hz
+  - Check: 4.0 - 0.5 <= 4.3 <= 5.0 + 0.5 -> PASS
 ```
 
-#### Visualization Dashboard (4 Rows × 3 Columns)
+#### Filter Design
 
-**Row 1: Filter Characteristics & Clinical Metrics**
-- Bode magnitude response (Butterworth order 4)
+**Single Butterworth Bandpass (2-8 Hz):**
+- Order: 4 (research standard)
+- Lower cutoff: 2 Hz (below clinical 3 Hz to preserve edge response)
+- Upper cutoff: 8 Hz (above clinical 7 Hz to preserve edge response)
+- At 3 Hz and 7 Hz: near-unity gain (no -3dB attenuation)
+- Implementation: `scipy.signal.butter` + `filtfilt` (zero-phase)
+
+#### Visualization Dashboard (3 Figures x 3 Plots)
+
+**Figure 1: Filter Characteristics & Metrics**
+- Bode magnitude response (Butterworth order 4, 2-8 Hz)
 - Bode phase response
-- Clinical metrics table (tremor type, confidence, RMS, power, frequency)
+- Validation results table (expected range, measured peak, PASS/FAIL)
 
-**Row 2: Dominant Axis Analysis (Auto-Detected)**
-- Highest energy axis - raw signal (e.g., Y-axis)
-- Filtered signal (3-12 Hz) with envelope
+**Figure 2: Resultant Vector Analysis**
+- Raw resultant magnitude `sqrt(Ax^2 + Ay^2 + Az^2)`
+- Filtered resultant (2-8 Hz) with envelope
 - Raw vs Filtered overlay comparison
 
-**Row 3: Resultant Vector Analysis**
-- Raw resultant magnitude `√(Ax² + Ay² + Az²)`
-- Filtered resultant (3-12 Hz) with envelope
-- Raw vs Filtered overlay comparison
-
-**Row 4: Power Spectral Density (PSD) Analysis**
-- PSD of dominant axis with tremor bands highlighted
-- PSD of resultant vector (raw vs filtered)
-- Band power bar chart with units (Rest 3-7 Hz vs Essential 6-12 Hz in m²/s⁴)
-
-#### Clinical Output Metrics
-
-**Quantitative Measurements:**
-- **Mean Amplitude**: Average tremor intensity (m/s²)
-- **RMS Amplitude**: Root-mean-square tremor power
-- **Maximum Amplitude**: Peak tremor intensity
-- **Dominant Frequency**: Primary tremor frequency (Hz)
-- **Rest Band Power**: Total power in 3-7 Hz range
-- **Essential Band Power**: Total power in 6-12 Hz range
-- **Power Ratio**: Rest/Essential classification confidence
-- **Tremor Type**: Automated classification result
+**Figure 3: Power Spectral Density (PSD) Analysis**
+- PSD full range (0-20 Hz): raw vs filtered, peak marked on filtered curve
+- PSD zoomed (1-12 Hz): filtered PSD with expected range and peak marker
+- Input/Output validation visual (expected range bar + measured frequency)
 
 #### Running the Analyzer
 
@@ -1012,66 +1087,22 @@ python3 offline_analyzer.py
 ```
 
 **Steps:**
-1. Click "📂 Load CSV Data"
-2. Select tremor CSV file
-3. View 4×3 dashboard with:
-   - **Row 1:** Filter design + clinical metrics table
-   - **Row 2:** Dominant axis (auto-detected, e.g., Y-axis) raw/filtered/overlay
-   - **Row 3:** Resultant vector magnitude raw/filtered/overlay
-   - **Row 4:** PSD analysis (dominant axis, all axes, band power)
-4. Check top-right for tremor classification
-5. Check console for numerical results
+1. Click "Load CSV Data"
+2. Select tremor CSV file from `tremor_data/`
+3. Enter expected frequency range when prompted (for validation)
+4. View dashboard with filter response, time-domain signals, and PSD
+5. Check validation result: PASS/FAIL with measured peak frequency
 
-**Console Output Example:**
+**Configuration:**
+```python
+FS = 100.0              # Sampling rate (Hz)
+FILTER_ORDER = 4        # Butterworth filter order
+FREQ_TREMOR_LOW = 2.0   # Filter lower bound
+FREQ_TREMOR_HIGH = 8.0  # Filter upper bound
+FREQ_REST_LOW = 3.0     # Clinical rest tremor lower bound
+FREQ_REST_HIGH = 7.0    # Clinical rest tremor upper bound
+FREQ_TOLERANCE_HZ = 0.5 # Validation tolerance
 ```
-======================================================================
-TREMOR ANALYSIS RESULTS
-======================================================================
-
-Tremor Classification: Rest Tremor (Parkinsonian)
-Confidence: High (ratio: 2.12)
-
-Rest Tremor Band (3-7 Hz):
-  Mean: 0.1234 m/s²
-  RMS: 0.2456 m/s²
-  Max: 0.5432 m/s²
-  Power: 4.5678
-
-Essential Tremor Band (6-12 Hz):
-  Mean: 0.0567 m/s²
-  RMS: 0.1234 m/s²
-  Max: 0.2876 m/s²
-  Power: 2.1543
-
-Dominant Frequency: 5.75 Hz (Rest tremor range)
-
-======================================================================
-```
-
-#### Interpreting Results
-
-**High Confidence Rest Tremor (ratio > 2.0):**
-- Strong evidence of Parkinsonian tremor
-- Dominant frequency typically 4-6 Hz
-- Clinical significance: Warrants PD evaluation
-- Consistent frequency across recordings
-
-**High Confidence Essential Tremor (ratio < 0.5):**
-- Postural tremor dominant
-- Higher frequency (6-12 Hz)
-- Different clinical implications
-- May require different treatment
-
-**Mixed Tremor (0.5 < ratio < 2.0):**
-- Power in both frequency bands
-- May indicate combined pathology
-- Requires clinical correlation
-- Consider medication effects
-
-**Severity Assessment:**
-- **Mild**: RMS < 0.10 m/s²
-- **Moderate**: RMS 0.10-0.30 m/s²
-- **Severe**: RMS > 0.30 m/s²
 
 ### Quick Data Verification
 
@@ -1319,9 +1350,16 @@ pip3 install pyserial numpy scipy matplotlib pandas
 
 ---
 
-## 📝 Version History
+## Version History
 
-### v3 (Current)
+### v4.0 (Current)
+- Simplified to rest tremor only (3-7 Hz)
+- Single 2-8 Hz Butterworth bandpass filter
+- Input-output validation (replaces Power Ratio classification)
+- Duty cycle motor control (replaces tremor sequences)
+- Motor eccentric mass: 40g at 1.5 cm radius
+
+### v3
 - Added ESP32 error event parsing
 - Implemented connection timeout detection
 - Added CSV data validation (7-column format)
@@ -1372,14 +1410,13 @@ For issues, questions, or contributions:
 
 ---
 
-**Last Updated:** 2026-01-24
-**Version:** 3.1
-**Status:** Production Ready ✅
+**Last Updated:** 2026-02-04
+**Version:** 4.0
 
-**New in v3.1:**
-- Research-based offline tremor analyzer
-- Resultant vector magnitude analysis
-- Dual-band tremor classification (Rest 3-7 Hz + Essential 6-12 Hz)
-- Clinical metrics: Mean, RMS, Max amplitude, spectral power
-- 12-plot educational dashboard with Bode plots and PSD
+**New in v4.0:**
+- Simplified to rest tremor only (3-7 Hz clinical band)
+- Single Butterworth bandpass filter 2-8 Hz (avoids edge attenuation)
+- Input-output validation replaces automated classification
+- Duty cycle motor control (single mode, user sets percentage)
+- Motor eccentric mass updated to 40g at 1.5 cm radius
 - Validated against peer-reviewed MPU6050 research

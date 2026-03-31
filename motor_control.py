@@ -1,269 +1,192 @@
 #!/usr/bin/env python3
 """
 L298N Motor Driver Control for Raspberry Pi 4
+
+Single mode: Duty Cycle Control
+  - Set duty cycle -> motor runs at that speed
+  - Change duty cycle anytime during operation
+  - Motor keeps running until you stop it or quit
+
+  Duty Cycle -> Average Voltage -> RPM (linear approximation):
+    20% -> 2.4V  -> ~125 RPM  -> ~2.1 Hz
+    40% -> 4.8V  -> ~250 RPM  -> ~4.2 Hz
+    60% -> 7.2V  -> ~375 RPM  -> ~6.3 Hz
+    80% -> 9.6V  -> ~500 RPM  -> ~8.3 Hz
+   100% -> 12V   -> ~625 RPM  -> ~10.4 Hz
+
 Hardware connections:
-- ENA (PWM) → GPIO18
-- IN1 (Direction) → GPIO23
-- IN2 (Direction) → GPIO24
-- OUT1 → Motor positive terminal
-- OUT2 → Motor negative terminal
-- 12V power supply connected to L298N
+  ENA (PWM) -> GPIO18
+  IN1       -> GPIO23
+  IN2       -> GPIO24
+  OUT1/OUT2 -> Motor terminals
+  12V power -> L298N power input
 """
 
 import RPi.GPIO as GPIO
 import time
 
 # GPIO Pin Configuration
-ENA_PIN = 18  # PWM control (speed)
+ENA_PIN = 18  # PWM control (speed via duty cycle)
 IN1_PIN = 23  # Direction control 1
 IN2_PIN = 24  # Direction control 2
 
 # PWM Configuration
-PWM_FREQUENCY = 1000  # 1 kHz (good for most DC motors)
+PWM_FREQUENCY = 1000  # 1 kHz carrier frequency (not motor speed!)
+
+# Motor Specifications (12V DC Gearbox Motor with eccentric mass)
+MAX_RPM = 625           # Maximum RPM at 12V (100% duty cycle)
+MAX_HZ = MAX_RPM / 60   # Maximum rotations per second = 10.42 Hz
+ECCENTRIC_MASS_G = 40   # Eccentric mass in grams
+MIN_DUTY_CYCLE = 15     # Minimum duty cycle for motor to start spinning
+
+
+def duty_cycle_to_rpm(duty_cycle):
+    """Convert duty cycle (0-100%) to RPM and Hz"""
+    rpm = (duty_cycle / 100.0) * MAX_RPM
+    hz = rpm / 60.0
+    return rpm, hz
+
+
+def hz_to_duty_cycle(target_hz):
+    """Convert target Hz to required duty cycle (0-100%)"""
+    if target_hz <= 0:
+        return 0
+    if target_hz > MAX_HZ:
+        print(f"Warning: {target_hz:.1f} Hz exceeds max {MAX_HZ:.1f} Hz, clamping")
+        target_hz = MAX_HZ
+    return (target_hz / MAX_HZ) * 100.0
+
 
 class MotorController:
-    """L298N Motor Driver Controller"""
+    """L298N Motor Driver - duty cycle controls speed"""
 
-    def __init__(self, ena_pin=ENA_PIN, in1_pin=IN1_PIN, in2_pin=IN2_PIN, pwm_freq=PWM_FREQUENCY):
-        """
-        Initialize motor controller
-
-        Args:
-            ena_pin: GPIO pin for PWM (speed control)
-            in1_pin: GPIO pin for direction control 1
-            in2_pin: GPIO pin for direction control 2
-            pwm_freq: PWM frequency in Hz (default 1000 Hz)
-        """
-        self.ena_pin = ena_pin
-        self.in1_pin = in1_pin
-        self.in2_pin = in2_pin
-        self.pwm_freq = pwm_freq
+    def __init__(self):
         self.pwm = None
-        self.current_speed = 0
-        self.current_direction = "STOPPED"
+        self.current_duty_cycle = 0
 
-        # Setup GPIO
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
 
-        # Configure pins
-        GPIO.setup(self.ena_pin, GPIO.OUT)
-        GPIO.setup(self.in1_pin, GPIO.OUT)
-        GPIO.setup(self.in2_pin, GPIO.OUT)
+        GPIO.setup(ENA_PIN, GPIO.OUT)
+        GPIO.setup(IN1_PIN, GPIO.OUT)
+        GPIO.setup(IN2_PIN, GPIO.OUT)
 
-        # Initialize PWM on ENA pin
-        self.pwm = GPIO.PWM(self.ena_pin, self.pwm_freq)
-        self.pwm.start(0)  # Start with 0% duty cycle (motor off)
+        # Initialize PWM
+        self.pwm = GPIO.PWM(ENA_PIN, PWM_FREQUENCY)
+        self.pwm.start(0)
 
-        # Ensure motor is stopped
-        self.stop()
+        # Motor off
+        GPIO.output(IN1_PIN, GPIO.LOW)
+        GPIO.output(IN2_PIN, GPIO.LOW)
 
-        print(f"✅ Motor controller initialized")
-        print(f"   ENA (PWM): GPIO{self.ena_pin}")
-        print(f"   IN1: GPIO{self.in1_pin}")
-        print(f"   IN2: GPIO{self.in2_pin}")
-        print(f"   PWM Frequency: {self.pwm_freq} Hz")
+        print(f"Motor initialized (GPIO{ENA_PIN}, carrier {PWM_FREQUENCY} Hz)")
+        print(f"Motor max: {MAX_RPM} RPM ({MAX_HZ:.1f} Hz)")
 
-    def set_speed(self, speed):
-        """
-        Set motor speed
-
-        Args:
-            speed: Speed percentage (0-100)
-                   0 = stopped
-                   100 = full speed
-        """
-        # Clamp speed to valid range
-        speed = max(0, min(100, speed))
-        self.current_speed = speed
-
+    def set_duty_cycle(self, duty_cycle):
+        """Set duty cycle (0-100%). Direction must be set separately."""
+        duty_cycle = max(0, min(100, duty_cycle))
+        self.current_duty_cycle = duty_cycle
         if self.pwm:
-            self.pwm.ChangeDutyCycle(speed)
+            self.pwm.ChangeDutyCycle(duty_cycle)
 
-    def forward(self, speed=50):
-        """
-        Run motor forward
-
-        Args:
-            speed: Speed percentage (0-100), default 50%
-        """
-        GPIO.output(self.in1_pin, GPIO.HIGH)
-        GPIO.output(self.in2_pin, GPIO.LOW)
-        self.set_speed(speed)
-        self.current_direction = "FORWARD"
-        print(f"▶️  Motor: FORWARD at {speed}%")
-
-    def reverse(self, speed=50):
-        """
-        Run motor in reverse
-
-        Args:
-            speed: Speed percentage (0-100), default 50%
-        """
-        GPIO.output(self.in1_pin, GPIO.LOW)
-        GPIO.output(self.in2_pin, GPIO.HIGH)
-        self.set_speed(speed)
-        self.current_direction = "REVERSE"
-        print(f"◀️  Motor: REVERSE at {speed}%")
+    def start_forward(self):
+        """Set direction to forward"""
+        GPIO.output(IN1_PIN, GPIO.HIGH)
+        GPIO.output(IN2_PIN, GPIO.LOW)
 
     def stop(self):
-        """
-        Stop motor (coast to stop - low power consumption)
-        IN1=LOW, IN2=LOW, PWM=0
-        """
-        GPIO.output(self.in1_pin, GPIO.LOW)
-        GPIO.output(self.in2_pin, GPIO.LOW)
-        self.set_speed(0)
-        self.current_direction = "STOPPED"
-        print("⏹️  Motor: STOPPED (coast)")
-
-    def brake(self):
-        """
-        Active brake (quick stop - higher power consumption)
-        IN1=HIGH, IN2=HIGH, PWM=100
-        """
-        GPIO.output(self.in1_pin, GPIO.HIGH)
-        GPIO.output(self.in2_pin, GPIO.HIGH)
-        self.set_speed(100)
-        self.current_direction = "BRAKING"
-        print("🛑 Motor: BRAKE (active)")
-
-    def get_status(self):
-        """
-        Get current motor status
-
-        Returns:
-            dict: Motor status (direction, speed)
-        """
-        return {
-            'direction': self.current_direction,
-            'speed': self.current_speed
-        }
+        """Stop motor"""
+        GPIO.output(IN1_PIN, GPIO.LOW)
+        GPIO.output(IN2_PIN, GPIO.LOW)
+        self.set_duty_cycle(0)
 
     def cleanup(self):
-        """
-        Cleanup GPIO and stop motor
-        """
-        print("\n🧹 Cleaning up motor controller...")
+        """Stop motor and release GPIO"""
         self.stop()
         if self.pwm:
             self.pwm.stop()
-        GPIO.cleanup([self.ena_pin, self.in1_pin, self.in2_pin])
-        print("✅ Motor controller cleanup complete")
+        GPIO.cleanup([ENA_PIN, IN1_PIN, IN2_PIN])
+        print("Motor cleanup done")
 
 
-# Standalone test/demo functions
-def run_test_sequence():
-    """Run a test sequence to verify motor operation"""
-    print("\n" + "="*60)
-    print("L298N Motor Controller Test Sequence")
-    print("="*60)
+def main():
+    """
+    Duty Cycle Control
 
-    motor = MotorController()
-
-    try:
-        print("\n1️⃣  Testing FORWARD at 30% speed...")
-        motor.forward(30)
-        time.sleep(2)
-
-        print("\n2️⃣  Increasing speed to 60%...")
-        motor.set_speed(60)
-        time.sleep(2)
-
-        print("\n3️⃣  Full speed forward (100%)...")
-        motor.forward(100)
-        time.sleep(2)
-
-        print("\n4️⃣  Applying BRAKE...")
-        motor.brake()
-        time.sleep(1)
-
-        print("\n5️⃣  Testing REVERSE at 30% speed...")
-        motor.reverse(30)
-        time.sleep(2)
-
-        print("\n6️⃣  Increasing reverse speed to 60%...")
-        motor.set_speed(60)
-        time.sleep(2)
-
-        print("\n7️⃣  Stopping motor...")
-        motor.stop()
-        time.sleep(1)
-
-        print("\n✅ Test sequence complete!")
-
-    except KeyboardInterrupt:
-        print("\n\n⏹️  Test interrupted by user")
-
-    finally:
-        motor.cleanup()
-
-
-def manual_control():
-    """Interactive manual motor control"""
-    print("\n" + "="*60)
-    print("L298N Motor Controller - Manual Mode")
-    print("="*60)
-    print("\nCommands:")
-    print("  f <speed>  - Forward (e.g., 'f 50' for 50% forward)")
-    print("  r <speed>  - Reverse (e.g., 'r 30' for 30% reverse)")
-    print("  s          - Stop (coast)")
-    print("  b          - Brake (active)")
-    print("  q          - Quit")
-    print("="*60)
+    Run the script -> set a duty cycle -> motor runs.
+    Change the duty cycle anytime, or leave it constant until done.
+    """
+    print("\n" + "=" * 60)
+    print("  MOTOR CONTROL - Duty Cycle")
+    print("=" * 60)
+    print(f"\n  Motor: {MAX_RPM} RPM max ({MAX_HZ:.1f} Hz), {ECCENTRIC_MASS_G}g mass")
+    print(f"\n  Duty%  Voltage  RPM    Hz")
+    print(f"  ─────  ───────  ─────  ────")
+    for d in [20, 30, 40, 50, 60, 70, 80, 90, 100]:
+        rpm, hz = duty_cycle_to_rpm(d)
+        print(f"  {d:3d}%   {d/100*12:5.1f}V   {rpm:5.0f}  {hz:4.1f}")
+    print(f"\n  Commands:")
+    print(f"    <number>    Set duty cycle %  (e.g. 50)")
+    print(f"    hz <value>  Set by frequency  (e.g. hz 4)")
+    print(f"    stop        Stop motor (duty cycle = 0)")
+    print(f"    quit        Stop motor and exit")
+    print("=" * 60)
 
     motor = MotorController()
+    motor.start_forward()
 
     try:
         while True:
-            cmd = input("\n> ").strip().lower().split()
-
-            if not cmd:
-                continue
-
-            if cmd[0] == 'q':
+            try:
+                cmd = input("\nDuty Cycle > ").strip().lower().split()
+            except EOFError:
                 break
 
-            elif cmd[0] == 'f':
-                speed = int(cmd[1]) if len(cmd) > 1 else 50
-                motor.forward(speed)
+            if not cmd:
+                # Show current status
+                rpm, hz = duty_cycle_to_rpm(motor.current_duty_cycle)
+                print(f"  Current: {motor.current_duty_cycle:.1f}% "
+                      f"-> {rpm:.0f} RPM ({hz:.1f} Hz)")
+                continue
 
-            elif cmd[0] == 'r':
-                speed = int(cmd[1]) if len(cmd) > 1 else 50
-                motor.reverse(speed)
+            if cmd[0] in ('q', 'quit', 'exit'):
+                break
 
-            elif cmd[0] == 's':
-                motor.stop()
+            elif cmd[0] in ('stop', 's'):
+                motor.set_duty_cycle(0)
+                print("  Motor stopped (0% duty cycle)")
 
-            elif cmd[0] == 'b':
-                motor.brake()
+            elif cmd[0] == 'hz':
+                if len(cmd) < 2:
+                    print("  Usage: hz <value>  (e.g. hz 4)")
+                    continue
+                try:
+                    target_hz = float(cmd[1])
+                    duty = hz_to_duty_cycle(target_hz)
+                    motor.set_duty_cycle(duty)
+                    rpm, actual_hz = duty_cycle_to_rpm(duty)
+                    print(f"  Set: {duty:.1f}% -> {rpm:.0f} RPM ({actual_hz:.1f} Hz)")
+                except ValueError:
+                    print("  Invalid Hz value")
 
             else:
-                print("❌ Unknown command")
-
-            # Show current status
-            status = motor.get_status()
-            print(f"   Status: {status['direction']} at {status['speed']}%")
+                try:
+                    duty = float(cmd[0])
+                    if duty < 0 or duty > 100:
+                        print("  Duty cycle must be 0-100%")
+                        continue
+                    motor.set_duty_cycle(duty)
+                    rpm, hz = duty_cycle_to_rpm(duty)
+                    print(f"  Set: {duty:.1f}% -> {rpm:.0f} RPM ({hz:.1f} Hz)")
+                except ValueError:
+                    print("  Enter a number (0-100) or: hz, stop, quit")
 
     except KeyboardInterrupt:
-        print("\n\n⏹️  Manual control interrupted")
-
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print("\n\nInterrupted")
 
     finally:
         motor.cleanup()
 
 
 if __name__ == "__main__":
-    import sys
-
-    print("\n╔════════════════════════════════════╗")
-    print("║ L298N Motor Controller             ║")
-    print("║ Raspberry Pi 4                     ║")
-    print("╚════════════════════════════════════╝")
-
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        run_test_sequence()
-    else:
-        manual_control()
+    main()
