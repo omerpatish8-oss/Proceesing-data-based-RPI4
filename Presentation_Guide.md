@@ -118,7 +118,7 @@ IDLE ──[לחצן]──→ RECORDING ──[לחצן]──→ PAUSED ──
 
 ### למה כיול סטטי מספיק?
 - הרעד שאנחנו מודדים הוא **תנודתי** (AC) - לא DC
-- גם אם נשאר offset קטן, שלב ה-DC Removal בעיבוד (הסרת ממוצע) מטפל בו
+- גם אם נשאר offset קטן, מסנן ה-Bandpass (2-8 Hz) בעיבוד מסיר אותו (DC = 0 Hz מונחת לחלוטין)
 - כיול דינמי (6-point calibration) הוא מורכב יותר ולא נדרש ליישום הזה
 
 ---
@@ -462,9 +462,9 @@ a(f) = F / M_total = 0.0236·f² / 0.65 = 0.04·f²  [m/s²]
     ├── 1. מנוע → קביעת DC% → PWM
     ├── 2. הקלטה → thread → USB Serial → CSV
     ├── 3. ניתוח → offline_analyzer_exp.py
-    │              └→ Load CSV → DC Removal → Resultant
-    │                 → Bandpass 2-8Hz → PSD(Welch)
-    │                 → FFT → 6 Figure Tabs
+    │              └→ Load CSV → Bandpass 2-8Hz per axis
+    │                 → Resultant from filtered → PSD per axis
+    │                 → Dominant axis → Metrics + FFT → 6 Figure Tabs
     ├── 4. סטטוס
     └── q. יציאה
 ```
@@ -480,7 +480,7 @@ a(f) = F / M_total = 0.0236·f² / 0.65 = 0.04·f²  [m/s²]
 | הנחתת -3dB בקצוות המסנן | הרחבת סרט: 2-8Hz במקום 3-7Hz |
 | חיישן "נתקע" (stuck readings) | זיהוי אוטומטי + reset (15 דגימות זהות) |
 | צימוד מכני - רעשים | הצמדת חיישן לכף היד + וקטור שקול |
-| DC offset מכבידה | כיול סטטי + DC Removal בעיבוד |
+| DC offset מכבידה | כיול סטטי + Bandpass 2-8 Hz (מסיר DC אוטומטית) |
 | Phase shift במסנן | שימוש ב-filtfilt (zero-phase, offline only) |
 | I2C hang אינסופי | Wire.setTimeOut(10ms) + watchdog 5s |
 

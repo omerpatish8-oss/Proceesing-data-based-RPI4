@@ -17,7 +17,7 @@ Output: PWM signal on GPIO18 that sets motor speed; the motor's physical vibrati
 
 ## offline_analyzer_exp.py
 Post-recording analysis tool with a Tkinter GUI. Loads a recorded CSV file, applies DSP processing, and produces 6 figure tabs for tremor characterization. Reports frequency and amplitude metrics without pass/fail judgment (experimental mode).
-Main components: DC offset removal (mean subtraction per axis), resultant vector calculation, Butterworth bandpass filter (2-8 Hz, order 4, zero-phase via filtfilt), Welch PSD estimation, FFT spectrum, Hilbert envelope, zero-crossing cycle counting, and metrics panel (peak SNR, dominant power ratio, frequency deviation from motor input).
+Main components: Butterworth bandpass filter (2-8 Hz, order 4, zero-phase via filtfilt) applied per axis independently (inherently removes DC/gravity), resultant vector from filtered axes (for RMS), Welch PSD per filtered axis, dominant axis selection (highest PSD peak in 2-8 Hz), FFT spectrum, Hilbert envelope, zero-crossing cycle counting, and metrics panel (RMS, dominant power ratio, frequency deviation from motor input).
 Output: interactive matplotlib figures (filter Bode plots, time-domain signals, PSD, zoomed 5s windows with cycle markers, full-recording FFT) and a console summary of all computed metrics.
 
 ## sys_manager.py

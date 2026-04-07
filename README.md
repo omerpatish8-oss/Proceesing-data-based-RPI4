@@ -33,8 +33,7 @@ A complete data acquisition and signal processing pipeline for detecting and val
 | `esp32_usb_serial_safe_V2.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
 | `rpi_usb_recorder_v2.py` | RPI 4 | Receives UART data, validates, writes CSV files |
 | `motor_control.py` | RPI 4 | Controls DC motor via L298N driver (PWM on GPIO18) |
-| `offline_analyzer.py` | PC/RPI 4 | Signal processing, PSD analysis, input-output validation |
-| `offline_analyzer_exp.py` | PC/RPI 4 | Experimental analyzer: no pass/fail, DPR metric, consecutive 5s zoom, full FFT |
+| `offline_analyzer_exp.py` | PC/RPI 4 | Offline analyzer: bandpass per-axis, PSD, DPR, 6 figure tabs, no pass/fail |
 | `sys_manager.py` | RPI 4 | Orchestrates motor + recorder in parallel using threading |
 
 ---
@@ -227,7 +226,7 @@ az = a.acceleration.z - aZ_off;
 
 These offsets are in **m/s^2** — the Adafruit MPU6050 library converts raw LSB register values to SI units internally, so `a.acceleration.z` is already in m/s^2 before the firmware applies calibration.
 
-**What the Z offset means physically:** At rest on a flat surface (Z axis pointing up), the sensor reports ~10.86 m/s^2 on Z — this is the sum of true gravitational acceleration (~9.81 m/s^2) plus the sensor's intrinsic bias (~1.05 m/s^2). The calibration offset `aZ_off = 1.046231` removes only the sensor bias, bringing the stationary Z reading back to ~9.81 m/s^2 (gravity). It does **not** remove gravity — that is handled later by the offline analyzer's DC offset removal (per-axis mean subtraction, Step 2 in the signal processing pipeline). The X and Y offsets (~0.30 and ~0.02 m/s^2) similarly remove small biases on the horizontal axes, where the true stationary value should be 0 m/s^2.
+**What the Z offset means physically:** At rest on a flat surface (Z axis pointing up), the sensor reports ~10.86 m/s^2 on Z — this is the sum of true gravitational acceleration (~9.81 m/s^2) plus the sensor's intrinsic bias (~1.05 m/s^2). The calibration offset `aZ_off = 1.046231` removes only the sensor bias, bringing the stationary Z reading back to ~9.81 m/s^2 (gravity). It does **not** remove gravity — that is handled later by the offline analyzer's bandpass filter (2-8 Hz), which inherently rejects DC (0 Hz) including gravity. The X and Y offsets (~0.30 and ~0.02 m/s^2) similarly remove small biases on the horizontal axes, where the true stationary value should be 0 m/s^2.
 
 #### Sensor Safety
 
@@ -562,250 +561,16 @@ $ python3 sys_manager.py
   → motor.cleanup() stops PWM and releases GPIO
 
 [Step 6] Launch Offline Analyzer
-  → subprocess.Popen(["python3", "offline_analyzer.py"])
+  → subprocess.Popen(["python3", "offline_analyzer_exp.py"])
 ```
 
-### Stage 6: Offline Signal Processing (`offline_analyzer.py`)
+### Stage 6: Offline Signal Processing (`offline_analyzer_exp.py`)
 
-The offline analyzer is a Tkinter GUI application that loads a recorded CSV file and performs the full signal processing chain.
-
-#### Signal Processing Chain
-
-```
-CSV File (Timestamp, Ax, Ay, Az)
-  │
-  │ Step 1: Parse CSV
-  ▼
-Raw axes: Ax[n], Ay[n], Az[n]  (N samples, 100 Hz)
-  │
-  │ Step 2: DC Offset Removal (gravity removal)
-  │   Ax_clean[n] = Ax[n] - mean(Ax)
-  │   Ay_clean[n] = Ay[n] - mean(Ay)
-  │   Az_clean[n] = Az[n] - mean(Az)
-  ▼
-Zero-mean axes
-  │
-  │ Step 3: Resultant Vector Magnitude
-  │   accel_mag[n] = sqrt(Ax_clean[n]^2 + Ay_clean[n]^2 + Az_clean[n]^2)
-  ▼
-Resultant vector: 1 signal, N samples
-  │
-  ├──────────────────────────────────────┐
-  │                                      │
-  ▼ RAW PATH                             ▼ FILTERED PATH
-  │                                      │
-  │ Step 4a: Welch PSD                   │ Step 4b: Butterworth Bandpass
-  │   psd_raw(f)                         │   2-8 Hz, Order 4, filtfilt
-  │                                      │   (zero-phase, effective Order 8)
-  │                                      ▼
-  │                               Filtered resultant
-  │                                      │
-  │                                      │ Step 5: Welch PSD
-  │                                      │   psd_filt(f)
-  │                                      │
-  │                                      │ Step 6: Peak Detection (2-8 Hz)
-  │                                      │   argmax(psd_filt) in band
-  │                                      │
-  │                                      │ Step 7: Metrics Extraction
-  │                                      │   RMS, Band Power, Peak PSD
-  │                                      │
-  │                                      │ Step 8: Input-Output Validation
-  │                                      │   |peak_freq - PWM_freq| <= 0.5 Hz
-  │                                      │   AND SNR >= 6 dB
-  ▼                                      ▼
-                Step 9: Visualization (4 Figures, 10 subplots)
-```
-
-#### Step 2: DC Offset Removal
-
-The accelerometer measures gravity as a constant ~9.8 m/s^2 on the axis pointing down. Subtracting the mean per axis removes this DC component:
-
-```python
-ax_clean = ax - np.mean(ax)     # Removes gravity + sensor bias
-ay_clean = ay - np.mean(ay)
-az_clean = az - np.mean(az)
-```
-
-After this step, each axis oscillates around zero. Only dynamic acceleration (vibration/tremor) remains.
-
-#### Step 3: Resultant Vector Magnitude
-
-Combines three axes into a single scalar signal representing total vibration intensity at each time sample:
-
-```python
-accel_mag[n] = sqrt(ax_clean[n]^2 + ay_clean[n]^2 + az_clean[n]^2)
-```
-
-This makes the analysis orientation-independent — tremor is detected regardless of how the sensor is mounted.
-
-Note: the magnitude is always >= 0 (it is a Euclidean norm). The raw resultant is NOT symmetric around zero. Symmetry is restored after bandpass filtering (Step 4b) which removes the DC component introduced by the norm operation.
-
-#### Step 4b: Butterworth Bandpass Filter
-
-```
-Filter type:     Butterworth (maximally flat passband)
-Order:           4 (per pass)
-Passband:        2-8 Hz
-Application:     scipy.signal.filtfilt (forward-backward)
-Effective order: 8 (filtfilt doubles the order)
-Phase shift:     Zero (filtfilt cancels phase distortion)
-```
-
-Why 2-8 Hz instead of the clinical 3-7 Hz? The Butterworth filter has gradual roll-off. At the -3 dB cutoff frequencies, the signal is attenuated by ~30%. By setting the filter edges at 2 and 8 Hz, the clinical band of 3-7 Hz falls well within the passband where attenuation is negligible.
-
-#### Step 5: Welch PSD (Power Spectral Density)
-
-Welch's method estimates the power spectrum by averaging periodograms of overlapping windowed segments:
-
-```
-Window length:       4 seconds = 400 samples (at 100 Hz)
-Overlap:             50% = 200 samples
-Window function:     Hann (scipy default)
-Frequency resolution: 1 / 4s = 0.25 Hz
-```
-
-Frequency resolution calculation:
-
-```
-df = fs / N_window = 100 Hz / 400 samples = 0.25 Hz
-```
-
-This means the PSD has a data point every 0.25 Hz: 0, 0.25, 0.50, ..., 49.75, 50.0 Hz.
-
-Number of segments for a 120-second recording:
-
-```
-Total samples:  12,000
-Segment length: 400
-Hop size:       200 (50% overlap)
-Segments:       (12,000 - 400) / 200 + 1 = 59 segments
-```
-
-Averaging 59 segments reduces the variance of the PSD estimate.
-
-**Output units:**
-- PSD: (m/s^2)^2/Hz — power spectral density
-- Plots display PSD in dB: Power_dB = 10 * log10(PSD_linear)
-
-#### Step 6: Peak Detection
-
-The dominant frequency is found by locating the maximum of the filtered PSD within the 2-8 Hz analysis band:
-
-```python
-rest_mask = (freq >= 2.0) & (freq <= 8.0)
-peak_idx = np.argmax(psd_filt[rest_mask])
-dominant_freq = freq[rest_mask][peak_idx]
-peak_psd = psd_filt[rest_mask][peak_idx]
-```
-
-Since log10 is monotonically increasing, the peak in linear PSD and the peak in dB PSD occur at the same frequency.
-
-#### Step 7: Metrics
-
-| Metric | Formula | Units | Meaning |
-|--------|---------|-------|---------|
-| RMS Amplitude | sqrt(mean(x_filt^2)) | m/s^2 | Overall vibration intensity in tremor band |
-| Mean Amplitude | mean(\|x_filt\|) | m/s^2 | Average absolute vibration |
-| Max Amplitude | max(\|x_filt\|) | m/s^2 | Peak instantaneous vibration |
-| Dominant Freq | argmax(PSD) in 2-8 Hz | Hz | Strongest frequency component |
-| Peak PSD | max(PSD) in 2-8 Hz | (m/s^2)^2/Hz | Power density at dominant frequency |
-| Band Power | integral(PSD, 2-8 Hz) | (m/s^2)^2 | Total power in tremor band |
-| Peak SNR | 10*log10(peak/noise_floor) | dB | Peak prominence above in-band noise |
-| Noise Floor | mean(PSD excl. peak +/-1 bin) | (m/s^2)^2/Hz | Average noise level in tremor band |
-
-**RMS vs Resultant Vector:**
-- Resultant vector: spatial combination (3 axes → 1 value per sample)
-- RMS: temporal summary (N samples → 1 scalar value)
-
-```
-Ax, Ay, Az  →  sqrt(Ax^2 + Ay^2 + Az^2)  →  N values  →  sqrt(mean(x^2))  →  1 value
-              (per sample)                                 (across all samples)
-```
-
-**Band Power** is computed by integrating the PSD over 2-8 Hz using the trapezoidal rule:
-
-```python
-band_power = np.trapz(psd_filt[rest_mask], freq[rest_mask])
-```
-
-This gives the total signal power within the tremor band in (m/s^2)^2.
-
-#### Step 8: Input-Output Validation
-
-The user enters the motor's PWM frequency (the expected vibration frequency). The system validates two conditions:
-
-**Condition 1 — Frequency Match:**
-
-```
-|dominant_freq - PWM_freq| <= 0.5 Hz
-```
-
-The tolerance of 0.5 Hz equals 2x the frequency resolution (2 x 0.25 Hz). This is a double-sided tolerance band centered on the PWM frequency.
-
-**Condition 2 — In-Band SNR (Peak Quality):**
-
-```
-SNR = 10 * log10(peak_PSD / noise_floor) >= 6 dB
-```
-
-The in-band SNR measures whether the detected peak is a real signal or just the tallest point in a flat noise spectrum. The noise floor is computed as the mean PSD across all bins in the 2-8 Hz band, excluding the peak bin and its immediate neighbors (+/-1 bin, to account for spectral leakage). A threshold of 6 dB means the peak must be at least 4x stronger than the average noise level in the band.
-
-**Combined Validation:**
-
-```
-PASS:  frequency match AND SNR >= 6 dB
-FAIL:  either condition not met
-```
-
-When validation fails, the system reports the specific reason:
-- `freq mismatch` — peak is at the wrong frequency
-- `weak peak` — peak is at the right frequency but not prominent enough
-- `freq + weak peak` — both conditions failed
-
-#### Step 9: Visualization
-
-The analyzer produces 4 figures with 10 subplots across separate tabs:
-
-**Figure 1 — Filter Characteristics (2 subplots):**
-- Fig 1.1: Bode Magnitude — shows filter gain vs frequency for both single-pass and filtfilt
-- Fig 1.2: Bode Phase — shows filtfilt achieves zero phase across all frequencies
-
-**Figure 2 — Time Domain Analysis (3 subplots):**
-- Fig 2.1: Raw resultant vector magnitude with RMS value
-- Fig 2.2: Filtered resultant (2-8 Hz) with Hilbert envelope and RMS value
-- Fig 2.3: Overlay of raw vs filtered for visual comparison
-
-**Figure 3 — Frequency Domain Analysis (3 subplots):**
-- Fig 3.1: PSD full range (0-20 Hz) — raw and filtered, with peak marker
-- Fig 3.2: PSD zoomed (1-12 Hz) — filtered PSD with PWM frequency line and +/-0.5 Hz tolerance band
-- Fig 3.3: Metrics and validation summary table (text) — includes SNR, noise floor, and fail reason
-
-**Figure 4 — Zoomed Time Domain (2 subplots):**
-- Fig 4.1: Filtered signal zoomed to a 3-second window from mid-recording, with Hilbert envelope, numbered rising zero-crossing markers, and cycle count — displays "Cycles: N | N/3s = X.XX Hz (PSD: Y.YY Hz)" for direct visual verification of the detected frequency
-- Fig 4.2: Raw vs filtered overlay on the same 3-second window — shows how the bandpass filter extracts the motor vibration from the raw signal
-
-### Stage 7: Experimental Offline Analyzer (`offline_analyzer_exp.py`)
-
-The experimental analyzer is a variant of the offline analyzer with **no pass/fail criteria**. It reports all metrics as informational values, adds two consecutive 5-second zoomed windows, and includes a full-recording FFT analysis.
-
-#### Differences from `offline_analyzer.py`
-
-| Feature | `offline_analyzer.py` | `offline_analyzer_exp.py` |
-|---------|----------------------|--------------------------|
-| Frequency deviation | Pass/Fail (threshold 0.5 Hz) | Informational only (reported, no judgment) |
-| Peak SNR | Pass/Fail (threshold 6 dB) | Not computed |
-| Energy metric | N/A | Dominant Power Ratio (DPR) |
-| Pipeline | Mean subtraction → Resultant → Bandpass on resultant | Bandpass per-axis → Resultant from filtered axes |
-| PSD source | On filtered resultant | On each filtered axis independently (dominant axis selected) |
-| Fig 2 | 3 subplots (raw, filtered, overlay) of resultant | 2 broader subplots of dominant axis (raw, filtered), 40-80s view |
-| Fig 3.3 | Standard metrics panel | Enlarged metrics panel with DPR |
-| Fig 4 | 3-second zoomed window (mid-recording) | 5-second zoomed window A (mid-recording) |
-| Fig 5 | N/A | 5-second zoomed window B (consecutive after A) |
-| Fig 6 | N/A | Full-width FFT magnitude of dominant axis (1-12 Hz) over full 120s |
+The offline analyzer is a Tkinter GUI application that loads a recorded CSV file and performs the full signal processing chain. It reports all metrics as informational values (no pass/fail judgment), uses independent per-axis filtering, and produces 6 figure tabs for tremor characterization.
 
 #### Signal Processing Pipeline
 
-The experimental analyzer uses an **independent per-axis filtering** approach that differs from the standard analyzer. Instead of first removing DC via mean subtraction and then computing a resultant, it applies the bandpass filter directly to each raw axis — the bandpass inherently removes DC (gravity) since it has zero gain at 0 Hz. Below is every step with the mathematical formulation and rationale.
+The analyzer applies the bandpass filter directly to each raw axis — the bandpass inherently removes DC (gravity) since it has zero gain at 0 Hz. No prior mean subtraction is needed. Below is every step with the mathematical formulation and rationale.
 
 ##### Step 1: CSV Parsing
 
@@ -1048,8 +813,6 @@ python3 motor_control.py
 python3 rpi_usb_recorder_v2.py
 
 # After recording completes — on PC or RPI:
-python3 offline_analyzer.py
-# Or use the experimental analyzer (no pass/fail, DPR, 5s zoom, FFT):
 python3 offline_analyzer_exp.py
 ```
 
@@ -1064,9 +827,7 @@ python3 motor_control.py
 python3 rpi_usb_recorder_v2.py
 # Or specify port: python3 rpi_usb_recorder_v2.py /dev/ttyUSB0
 
-# Offline analyzer (GUI — with pass/fail validation)
-python3 offline_analyzer.py
-# Experimental analyzer (GUI — informational metrics, no pass/fail)
+# Offline analyzer (GUI — informational metrics, no pass/fail)
 python3 offline_analyzer_exp.py
 # Load CSV → Enter PWM frequency → Click "Load CSV Data"
 ```
@@ -1105,11 +866,10 @@ Wire (built-in)
 MPU6050                ESP32                    RPI Recorder           Offline Analyzer
 ───────                ─────                    ────────────           ────────────────
 Accel X,Y,Z  ──I2C──→ Read registers    ──→   ser.readline()   ──→  Load CSV
-(raw LSB)              Convert to m/s^2        Validate 4 cols       DC offset removal
-                       Subtract offsets         Write to CSV          Resultant vector
-                       Stuck detection                                Bandpass 2-8 Hz
-                       Format CSV line                                Welch PSD
-                       Serial.printf()  ──UART──→                    Peak detection
-                       (100 Hz, 115200 baud)                          Validation
-                                                                      Plot results
+(raw LSB)              Convert to m/s^2        Validate 4 cols       Bandpass 2-8 Hz per axis
+                       Subtract offsets         Write to CSV          Resultant from filtered
+                       Stuck detection                                PSD per axis (Welch)
+                       Format CSV line                                Dominant axis selection
+                       Serial.printf()  ──UART──→                    Metrics + FFT
+                       (100 Hz, 115200 baud)                          6 Figure Tabs
 ```
