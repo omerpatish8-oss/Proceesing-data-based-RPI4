@@ -432,7 +432,7 @@ class TremorAnalyzerExperimental:
 
         # Step 6: Calculate metrics
         # Time-domain metrics from resultant, freq-domain from dominant axis PSD
-        metrics = self.calculate_metrics(result_raw, result_filtered,
+        metrics = self.calculate_metrics(result_filtered,
                                          f_psd, psd_dominant,
                                          dominant_axis_name)
 
@@ -444,7 +444,7 @@ class TremorAnalyzerExperimental:
             b_tremor, a_tremor, metrics
         )
 
-    def calculate_metrics(self, accel_raw, accel_filt, freq, psd_dominant,
+    def calculate_metrics(self, accel_filt, freq, psd_dominant,
                           dominant_axis_name='?'):
         """Calculate tremor metrics - INFORMATIONAL ONLY (no pass/fail).
         Time-domain: RMS of resultant vector (accel_filt = sqrt(ax²+ay²+az²)).
