@@ -16,9 +16,14 @@ Main components: `MotorController` class (GPIO setup, PWM at 1 kHz carrier, dire
 Output: PWM signal on GPIO18 that sets motor speed; the motor's physical vibration is picked up by the MPU6050 sensor on the ESP32.
 
 ## offline_analyzer_exp.py
-Post-recording analysis tool with a Tkinter GUI. Loads a recorded CSV file, applies DSP processing, and produces 6 figure tabs for tremor characterization. Reports frequency and amplitude metrics without pass/fail judgment (experimental mode).
-Main components: Butterworth bandpass filter (2-8 Hz, order 4, zero-phase via filtfilt) applied per axis independently (inherently removes DC/gravity), resultant vector from filtered axes (for RMS), Welch PSD per filtered axis, dominant axis selection (highest PSD peak in 2-8 Hz), FFT spectrum, Hilbert envelope, zero-crossing cycle counting, and metrics panel (RMS, dominant power ratio, frequency deviation from motor input).
-Output: interactive matplotlib figures (filter Bode plots, time-domain signals, PSD, zoomed 5s windows with cycle markers, full-recording FFT) and a console summary of all computed metrics.
+Post-recording analysis tool with a Tkinter GUI. Loads a recorded CSV file, applies DSP processing, and produces 7 figure tabs for tremor characterization. Reports frequency and amplitude metrics without pass/fail judgment (experimental mode).
+Main components: Butterworth bandpass filter (2-8 Hz, order 4, zero-phase via filtfilt) applied per axis independently (inherently removes DC/gravity), resultant vector from filtered axes (for RMS), Welch PSD per filtered axis, dominant axis selection (highest PSD peak in 2-8 Hz), FFT spectrum of the raw dominant axis (0-12 Hz), STFT spectrogram of the raw dominant axis (0-12 Hz), Hilbert envelope, zero-crossing cycle counting, and metrics panel (RMS, dominant power ratio, frequency deviation from motor input).
+Key design decisions:
+- Fig 2.1 displays the raw dominant axis signal without DC removal (preserving the true sensor output including gravity offset).
+- Fig 3.1 Raw PSD comparison uses the raw dominant axis (DC-removed for PSD only) instead of the resultant vector, for a fair before/after comparison against the filtered PSD on the same axis.
+- Fig 6 FFT operates on the raw (unfiltered) dominant axis to reveal the full spectrum including content the bandpass filter removes.
+- Fig 7 Spectrogram (STFT) of the raw dominant axis shows time-frequency evolution across the full recording.
+Output: interactive matplotlib figures (filter Bode plots, time-domain signals, PSD, zoomed 5s windows with cycle markers, full-recording FFT, spectrogram) and a console summary of all computed metrics.
 
 ## sys_manager.py
 Top-level orchestrator that ties all Raspberry Pi components together via a menu-based interface. Allows the user to start the motor, launch the recorder, and run the offline analyzer in the correct sequence.

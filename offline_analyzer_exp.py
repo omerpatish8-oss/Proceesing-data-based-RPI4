@@ -6,20 +6,24 @@ Based on offline_analyzer.py with the following changes:
     as informational metrics only (no PASS/FAIL judgment).
   - Peak SNR is calculated and Dominant Power Ratio (DPR) is derived from
     peak PSD vs total band power — shows how concentrated the energy is.
-  - Fig 2: Raw and filtered dominant axis waveform (2 broader plots, no overlay).
+  - Fig 2.1: Raw dominant axis without DC removal (true sensor output).
+  - Fig 2.2: Filtered dominant axis waveform with Hilbert envelope.
+  - Fig 3.1: Raw PSD uses raw dominant axis (DC-removed) for fair comparison.
   - Fig 3.3: Enlarged metrics panel with larger font.
   - Fig 4: Zoomed filtered signal for a 5-second window (first half of a
     10-second block taken from the middle of the recording).
   - Fig 5: Zoomed filtered signal for the next consecutive 5-second window
     (second half of the same 10-second block, directly after Fig 4).
-  - Fig 6: Single full-width FFT magnitude plot (1-12 Hz) over the full
-    120-second recording.
+  - Fig 6: FFT magnitude of the raw (unfiltered) dominant axis (0-12 Hz)
+    over the full 120-second recording.
+  - Fig 7: STFT Spectrogram of the raw dominant axis (0-12 Hz) showing
+    time-frequency evolution across the full recording.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import numpy as np
-from scipy.signal import butter, filtfilt, welch, hilbert, freqz
+from scipy.signal import butter, filtfilt, welch, hilbert, freqz, spectrogram
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.gridspec import GridSpec
@@ -257,6 +261,24 @@ class TremorAnalyzerExperimental:
         self.canvases.append(canvas6)
         self.all_axes.extend([self.ax_fft_zoom])
 
+        # ==================== FIGURE 7: SPECTROGRAM (STFT) ====================
+        fig7_frame = ttk.Frame(self.notebook)
+        self.notebook.add(fig7_frame, text="Figure 7 - Spectrogram")
+
+        self.fig7 = plt.figure(figsize=(15, 4))
+        gs7 = GridSpec(1, 1, figure=self.fig7)
+
+        self.ax_spectrogram = self.fig7.add_subplot(gs7[0, 0])
+
+        canvas7 = FigureCanvasTkAgg(self.fig7, master=fig7_frame)
+        canvas7.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar7 = NavigationToolbar2Tk(canvas7, fig7_frame)
+        toolbar7.update()
+
+        self.figures.append(self.fig7)
+        self.canvases.append(canvas7)
+        self.all_axes.extend([self.ax_spectrogram])
+
         # Initialize plots
         self.clear_all_plots()
 
@@ -364,9 +386,9 @@ class TremorAnalyzerExperimental:
         # Step 3: Resultant vector from filtered axes (for time-domain metrics)
         result_filtered = np.sqrt(ax_filt**2 + ay_filt**2 + az_filt**2)
 
-        # Raw resultant (DC removed) — used only for raw PSD comparison
-        result_raw = np.sqrt(ax**2 + ay**2 + az**2)
-        result_raw = result_raw - np.mean(result_raw)
+        # Raw resultant is NOT used for PSD comparison (nonlinear distortion).
+        # Instead, raw PSD comparison uses the raw dominant axis (DC-removed).
+        # See Step 4 below where psd_raw is computed from the raw dominant axis.
 
         # Step 4: PSD on each filtered axis independently
         nperseg = min(len(ax_filt), int(FS * WINDOW_SEC))
@@ -392,16 +414,20 @@ class TremorAnalyzerExperimental:
         psd_dominant = axis_psds[dominant_axis_name]
         dominant_signal = axis_signals[dominant_axis_name]
 
-        # Raw PSD for comparison display (from DC-removed raw resultant)
-        _, psd_raw = welch(result_raw, FS, nperseg=nperseg, noverlap=noverlap)
+        # Raw PSD for comparison: use the raw dominant axis (DC-removed)
+        # This gives a fair before/after comparison on the same axis
+        axis_raw_signals = {'X': ax, 'Y': ay, 'Z': az}
+        dominant_raw_for_psd = axis_raw_signals[dominant_axis_name] - np.mean(axis_raw_signals[dominant_axis_name])
+        _, psd_raw = welch(dominant_raw_for_psd, FS, nperseg=nperseg, noverlap=noverlap)
 
         # Store dominant axis info for FFT and plotting
         self._dominant_axis_signal = dominant_signal
         self._dominant_axis_name = dominant_axis_name
 
-        # Raw dominant axis (DC-removed) for time-domain display
+        # Raw dominant axis (NO DC removal) for time-domain display (Fig 2.1)
+        # Shows the true sensor output including gravity offset
         axis_raw = {'X': ax, 'Y': ay, 'Z': az}
-        dominant_raw = axis_raw[dominant_axis_name] - np.mean(axis_raw[dominant_axis_name])
+        dominant_raw = axis_raw[dominant_axis_name]
         self._dominant_axis_raw = dominant_raw
 
         # Step 6: Calculate metrics
@@ -539,7 +565,7 @@ class TremorAnalyzerExperimental:
 
         self.ax_result_raw.clear()
         self.ax_result_raw.plot(t, dom_raw, color=COL_RAW, linewidth=0.8, alpha=0.7)
-        self.ax_result_raw.set_title(f'Fig 2.1 - Dominant Axis ({dom_ax}) Raw | RMS: {np.sqrt(np.mean(dom_raw**2)):.4f} m/s\u00b2',
+        self.ax_result_raw.set_title(f'Fig 2.1 - Dominant Axis ({dom_ax}) Raw (No DC Removal)',
                                     fontweight='bold')
         self.ax_result_raw.set_ylabel('Accel (m/s\u00b2)')
         self.ax_result_raw.set_xlabel('Time (s)')
@@ -687,6 +713,11 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         # ============================================================
         self._plot_fft_full(metrics)
 
+        # ============================================================
+        # FIGURE 7: SPECTROGRAM (STFT) OF RAW DOMINANT AXIS
+        # ============================================================
+        self._plot_spectrogram(t, metrics)
+
         # Draw all canvases
         for canvas in self.canvases:
             canvas.draw()
@@ -804,19 +835,20 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
     # Helper: FFT over full recording
     # ------------------------------------------------------------------
     def _plot_fft_full(self, metrics):
-        """Compute and plot FFT magnitude spectrum of the dominant axis.
+        """Compute and plot FFT magnitude spectrum of the raw (unfiltered) dominant axis.
 
-        Single full-width plot zoomed into the 1-12 Hz range with peak annotation.
+        Single full-width plot zoomed into the 0-12 Hz range with peak annotation.
+        Shows the full spectrum including content the bandpass filter removes.
         """
-        dominant_signal = self._dominant_axis_signal
+        raw_signal = self._dominant_axis_raw
         dom_ax = self._dominant_axis_name
-        N = len(dominant_signal)
+        N = len(raw_signal)
 
-        # FFT of the dominant filtered axis only
+        # FFT of the raw (unfiltered) dominant axis
         fft_freqs = np.fft.rfftfreq(N, d=1.0/FS)
-        fft_magnitude = np.abs(np.fft.rfft(dominant_signal)) / N
+        fft_magnitude = np.abs(np.fft.rfft(raw_signal)) / N
 
-        # Find peak in the 2-8 Hz band on the filtered FFT
+        # Find peak in the 2-8 Hz band on the raw FFT
         band_mask = (fft_freqs >= FREQ_REST_LOW) & (fft_freqs <= FREQ_REST_HIGH)
         if np.sum(band_mask) > 0:
             band_mag = fft_magnitude[band_mask]
@@ -828,10 +860,10 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
             fft_peak_freq = 0
             fft_peak_mag = 0
 
-        # -- Fig 6: FFT zoomed into 1-12 Hz (full-width single plot) --
+        # -- Fig 6: FFT of raw signal zoomed into 0-12 Hz (full-width single plot) --
         self.ax_fft_zoom.clear()
-        self.ax_fft_zoom.plot(fft_freqs, fft_magnitude, color=COL_FILTERED,
-                             linewidth=1.5, label='Filtered FFT')
+        self.ax_fft_zoom.plot(fft_freqs, fft_magnitude, color=COL_RAW,
+                             linewidth=1.5, label='Raw FFT')
 
         pwm_freq = metrics['pwm_freq']
         self.ax_fft_zoom.axvline(pwm_freq, color='blue', linestyle='-', alpha=0.7,
@@ -846,13 +878,77 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
                                 label=f'Peak: {fft_peak_freq:.2f} Hz ({fft_peak_mag:.4f})')
 
         self.ax_fft_zoom.set_title(
-            f'Fig 6 - FFT Dominant Axis {dom_ax} (1-12 Hz) | Peak: {fft_peak_freq:.2f} Hz',
+            f'Fig 6 - FFT Raw Dominant Axis {dom_ax} (0-12 Hz) | Peak: {fft_peak_freq:.2f} Hz',
             fontweight='bold')
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
-        self.ax_fft_zoom.set_xlim(1, 12)
+        self.ax_fft_zoom.set_xlim(0, 12)
         self.ax_fft_zoom.grid(True, alpha=0.3)
         self.ax_fft_zoom.legend(fontsize=7)
+
+
+    # ------------------------------------------------------------------
+    # Helper: Spectrogram (STFT) of raw dominant axis
+    # ------------------------------------------------------------------
+    def _plot_spectrogram(self, t, metrics):
+        """Compute and plot STFT spectrogram of the raw (unfiltered) dominant axis.
+
+        Shows time-frequency evolution across the full recording (0-12 Hz).
+        Reveals whether the dominant frequency is stable or drifting over time.
+        """
+        raw_signal = self._dominant_axis_raw
+        dom_ax = self._dominant_axis_name
+
+        # STFT parameters
+        nperseg_spec = 256      # 2.56 seconds window
+        noverlap_spec = 224     # 87.5% overlap for smooth time resolution
+
+        f_spec, t_spec, Sxx = spectrogram(
+            raw_signal, fs=FS,
+            nperseg=nperseg_spec,
+            noverlap=noverlap_spec,
+            window='hann'
+        )
+
+        # Offset t_spec to match recording time axis
+        if len(t) > 0:
+            t_spec = t_spec + t[0]
+
+        # Convert to dB scale
+        Sxx_db = 10 * np.log10(Sxx + 1e-12)
+
+        # Mask to 0-12 Hz
+        freq_mask = f_spec <= 12.0
+
+        self.ax_spectrogram.clear()
+        im = self.ax_spectrogram.pcolormesh(
+            t_spec, f_spec[freq_mask], Sxx_db[freq_mask, :],
+            shading='gouraud', cmap='inferno'
+        )
+
+        # PWM reference line
+        pwm_freq = metrics['pwm_freq']
+        self.ax_spectrogram.axhline(pwm_freq, color='cyan', linestyle='--',
+                                    linewidth=1.5, alpha=0.8,
+                                    label=f'PWM Freq: {pwm_freq:.1f} Hz')
+
+        # Tremor band boundaries
+        self.ax_spectrogram.axhline(FREQ_REST_LOW, color='white', linestyle=':',
+                                    linewidth=0.8, alpha=0.5)
+        self.ax_spectrogram.axhline(FREQ_REST_HIGH, color='white', linestyle=':',
+                                    linewidth=0.8, alpha=0.5)
+
+        self.ax_spectrogram.set_title(
+            f'Fig 7 - Spectrogram Raw Dominant Axis {dom_ax} (0-12 Hz)',
+            fontweight='bold')
+        self.ax_spectrogram.set_xlabel('Time (s)')
+        self.ax_spectrogram.set_ylabel('Frequency (Hz)')
+        self.ax_spectrogram.set_ylim(0, 12)
+        self.ax_spectrogram.legend(fontsize=7, loc='upper right')
+
+        # Colorbar
+        cb = self.fig7.colorbar(im, ax=self.ax_spectrogram, pad=0.01)
+        cb.set_label('Power (dB)', fontsize=8)
 
 
 if __name__ == "__main__":
