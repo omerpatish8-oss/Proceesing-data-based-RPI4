@@ -2,7 +2,7 @@
 
 ## esp32_usb_serial_safe_V2.ino
 Runs on the ESP32 microcontroller. Reads MPU6050 accelerometer data at 100 Hz via polled `millis()` timing, manages recording cycles (start/pause/resume/stop) via a physical button and FSM (IDLE/RECORDING/PAUSED/WAITING_NEXT/FINISHED), and detects sensor faults with automatic reset.
-Safety features: stuck-sensor detection (15 identical reads), I2C read failure counting (5 max), I2C health check (every 500 ms), `Wire.setTimeOut(10)` to prevent I2C bus hangs, and a 5-second hardware watchdog (WDT) that auto-reboots on any hang. SSD1306 OLED display shows cycle status and countdown. LED indicators for state feedback.
+Safety stack (4 layers): stuck-sensor detection (15 identical reads), I2C read failure counting (5 max), `Wire.setTimeOut(10)` to prevent I2C bus hangs, and a 5-second hardware watchdog (WDT) that auto-reboots on any hang. Periodic I2C health check was removed — redundant with read failure counting (if sensor disconnects, getEvent() fails within 50ms and triggers reset). SSD1306 OLED display updates every 4 seconds during recording (reduced from 1s to minimize the ~23ms blocking that disrupts 100Hz sampling). LED indicators for state feedback.
 Output: streams CSV lines (`Timestamp,Ax,Ay,Az`) and control events (`START_RECORDING`, `CYCLE,n`, `PAUSE_CYCLE`, `RESUME_CYCLE`, `END_RECORDING`, `ALL_COMPLETE`, error flags) over USB Serial at 115200 baud.
 
 ## rpi_usb_recorder_v2.py

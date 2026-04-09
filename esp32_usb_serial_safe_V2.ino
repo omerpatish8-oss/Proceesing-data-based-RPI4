@@ -1,13 +1,24 @@
 /**
  * Parkinson's Tremor Detection System - USB Serial Version
  * Safe & Simple communication via USB to Raspberry Pi
- * 
- * Features: 
+ *
+ * Features:
  * 1. USB Serial (no GPIO UART needed!)
  * 2. Pause/Resume with button
  * 3. Stuck sensor detection & auto-reset
  * 4. 100 Hz sampling
- * 
+ * 5. OLED update every 4s (reduced from 1s to minimize ~23ms blocking during sampling)
+ *
+ * Safety stack (4 layers):
+ *   Layer 4: Watchdog (5s)           — catches any hang → auto-reboot
+ *   Layer 3: Wire.setTimeOut(10ms)   — catches I2C hang → getEvent fails
+ *   Layer 2: Read failure (5x)       — catches soft I2C errors → auto-reset
+ *   Layer 1: Stuck detection (15x)   — catches ADC lockup → auto-reset
+ *
+ * Note: Health check (periodic I2C ping) was removed — redundant with
+ * read failure counting. If sensor disconnects, getEvent() fails,
+ * failedReads reaches 5 within 50ms, and triggers sensor reset.
+ *
  * Connection: ESP32 USB Micro → Raspberry Pi USB Port
  * Button: GPIO 13
  */
@@ -57,7 +68,6 @@ const int MAX_CYCLES = 2;
 unsigned long lastSampleTime = 0;
 unsigned long lastScreenUpdate = 0;
 unsigned long lastLedBlink = 0;
-unsigned long lastSensorCheck = 0;
 unsigned long lastDebounceTime = 0;
 
 // ================================================================
@@ -156,25 +166,16 @@ void loop() {
       
     case RECORDING:
       currentTotalTime = accumulatedTime + (millis() - segmentStartTime);
-      
+
       // Sample sensor
       if (millis() - lastSampleTime >= SAMPLE_INTERVAL_MS) {
         lastSampleTime = millis();
         sampleSensor();
       }
-      
-      // Check sensor health
-      if (millis() - lastSensorCheck >= 500) {
-        lastSensorCheck = millis();
-        if (!checkSensor()) {
-          Serial.println("[ERROR] Sensor lost connection!");
-          Serial.println("ERROR_SENSOR_LOST");
-          resetSensor();
-        }
-      }
-      
-      // Update display
-      if (millis() - lastScreenUpdate >= 1000) {
+
+      // Update display every 4s (reduced from 1s to minimize OLED blocking
+      // during sampling — display.display() takes ~23ms which delays 2+ samples)
+      if (millis() - lastScreenUpdate >= 4000) {
         lastScreenUpdate = millis();
         updateRecordingDisplay(false);
       }
@@ -263,17 +264,6 @@ bool initSensor() {
   
   delay(100);
   return true;
-}
-
-bool checkSensor() {
-  Wire.beginTransmission(0x68);
-  bool connected = (Wire.endTransmission() == 0);
-  
-  if (connected && (millis() - lastSuccessfulRead > 2000)) {
-    return false;
-  }
-  
-  return connected;
 }
 
 void sampleSensor() {

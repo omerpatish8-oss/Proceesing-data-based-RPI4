@@ -230,19 +230,20 @@ These offsets are in **m/s^2** — the Adafruit MPU6050 library converts raw LSB
 
 #### Sensor Safety
 
-The firmware monitors sensor health continuously and has two system-level safety nets:
+The firmware monitors sensor health continuously with a 4-layer safety stack:
 
 | Check | Interval | Threshold | Action |
 |-------|----------|-----------|--------|
 | Stuck detection | Every sample | 15 identical readings (delta < 0.001 m/s^2) | Auto-reset sensor |
 | Read failure | Every sample | 5 consecutive failures | Auto-reset sensor |
-| Connection loss | Every 500 ms | I2C ACK missing or 2s since last read | Auto-reset sensor |
 | **I2C bus timeout** | **Every I2C transaction** | **10 ms** | **Unblocks Wire library, returns error** |
 | **Hardware watchdog (WDT)** | **Every loop() iteration** | **5 seconds** | **Auto-reboots ESP32** |
 
+Note: A periodic I2C health check (every 500 ms) was previously included but has been removed — it is redundant with the read failure counter. If the sensor disconnects, `mpu.getEvent()` fails immediately, the `failedReads` counter reaches 5 within 50 ms, and triggers `resetSensor()`. The health check added an extra I2C transaction every 500 ms with no additional fault coverage.
+
 ##### I2C Bus Timeout (Wire.setTimeOut)
 
-The ESP32 `Wire` library can hang indefinitely if the I2C bus is disrupted mid-transaction (e.g., SDA or SCL wire disconnects while the MPU6050 is transmitting). In this scenario, `mpu.getEvent()` never returns, and all software-level safety checks (stuck detection, read failure counting, health checks) become unreachable.
+The ESP32 `Wire` library can hang indefinitely if the I2C bus is disrupted mid-transaction (e.g., SDA or SCL wire disconnects while the MPU6050 is transmitting). In this scenario, `mpu.getEvent()` never returns, and all software-level safety checks (stuck detection, read failure counting) become unreachable.
 
 `Wire.setTimeOut(10)` sets a 10 ms hardware timeout on every I2C transaction. If any I2C read/write does not complete within 10 ms, the Wire library returns an error instead of blocking forever. This allows `mpu.getEvent()` to fail gracefully, which then triggers the existing `failedReads` counter and `resetSensor()` flow.
 
