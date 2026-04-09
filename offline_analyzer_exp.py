@@ -883,6 +883,7 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         self.ax_fft_zoom.set_xlabel('Frequency (Hz)')
         self.ax_fft_zoom.set_ylabel('Magnitude (m/s\u00b2)')
         self.ax_fft_zoom.set_xlim(0, 12)
+        self.ax_fft_zoom.set_ylim(0, 2)
         self.ax_fft_zoom.grid(True, alpha=0.3)
         self.ax_fft_zoom.legend(fontsize=7)
 
