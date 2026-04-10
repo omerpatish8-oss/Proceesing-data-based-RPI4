@@ -2,12 +2,27 @@
 """
 System Manager - Orchestrates motor control, data recording, and offline analysis.
 
-Architecture:
-  - Main thread: menu-based user interface
-  - Motor: software PWM via RPi.GPIO library (MotorController)
-  - Recorder thread: UART read loop (rpi_usb_recorder_v2.record_data)
-  - Motor and recorder run in parallel (motor keeps spinning while recorder captures)
-  - Offline analyzer: launched only after recording is finished
+Concurrency model (three components, three mechanisms):
+  - Motor PWM: kernel-side PWM thread inside RPi.GPIO. No user-space thread
+    needed — once set_duty_cycle() is called, the pulse train is generated
+    autonomously by the GPIO library.
+  - Recorder: daemon threading.Thread running record_data(port). The recorder
+    is I/O-bound (blocked on ser.readline()), so it releases the CPython GIL
+    while waiting, leaving the main menu thread fully responsive. A thread
+    (not a process) is preferred because the recorder and the menu need to
+    share a cheap in-process boolean — is_actively_recording — to decide
+    whether the analyzer can be launched right now.
+  - Offline analyzer: separate OS process via subprocess.Popen. Tkinter is
+    not thread-safe and supports only one mainloop() per interpreter, so the
+    analyzer must live in its own interpreter. A subprocess also gives it
+    its own crash domain — a matplotlib/NumPy exception in the analyzer
+    cannot take down the recorder thread.
+
+Analyzer-between-cycles: the analyzer can be launched as soon as any cycle
+completes, not only after ALL cycles are done. The recorder module exposes
+`is_actively_recording` which is True only while samples are flowing. Between
+cycles the thread is alive but that flag is False, so the analyzer launch is
+allowed — the CSV from the just-finished cycle is closed and safe to read.
 
 Usage:
   python3 sys_manager.py
@@ -19,6 +34,7 @@ import sys
 import subprocess
 
 from motor_control import MotorController, duty_cycle_to_rpm
+import rpi_usb_recorder_v2
 from rpi_usb_recorder_v2 import record_data, find_port, create_output_folder
 
 
@@ -123,15 +139,30 @@ def start_recorder():
 
 
 def start_analyzer():
-    """Option 3: Launch offline analyzer (only if recording is finished)."""
-    if recorder_thread is not None and recorder_thread.is_alive():
-        print("\n  Recording is still in progress!")
-        print("  The analyzer can only run after recording is finished.")
+    """Option 3: Launch offline analyzer.
+
+    Allowed whenever a cycle is NOT actively being recorded. This includes:
+      - before any cycle has started (nothing to analyze, but the GUI still
+        opens so the user can load an older file)
+      - between cycles (recorder thread alive, waiting for next button press)
+      - after all cycles complete
+
+    Blocked only while is_actively_recording is True (samples mid-flight).
+    """
+    if rpi_usb_recorder_v2.is_actively_recording:
+        print("\n  A recording cycle is currently in progress!")
+        print("  Wait for the cycle to finish (END_RECORDING) before")
+        print("  launching the analyzer — the CSV is still being written.")
         return
+
+    # Hint the user at the most recent cycle file if we have one
+    last_file = rpi_usb_recorder_v2.last_completed_cycle_file
+    if last_file:
+        print(f"\n  Last completed cycle file: {last_file}")
 
     print("\n  Starting offline_analyzer_exp.py...")
     subprocess.Popen([sys.executable, "offline_analyzer_exp.py"])
-    print("  Analyzer launched.")
+    print("  Analyzer launched (in its own subprocess).")
 
 
 def stop_motor():
@@ -158,15 +189,26 @@ def show_status():
 
     # Recorder
     if recorder_thread is not None and recorder_thread.is_alive():
-        print(f"  Recorder: RUNNING")
+        if rpi_usb_recorder_v2.is_actively_recording:
+            print(f"  Recorder: RECORDING (cycle in progress)")
+        else:
+            print(f"  Recorder: IDLE (waiting for next cycle)")
     elif recording_finished:
         print(f"  Recorder: FINISHED")
     else:
         print(f"  Recorder: NOT STARTED")
 
     # Analyzer availability
-    can_analyze = recorder_thread is None or not recorder_thread.is_alive()
-    print(f"  Analyzer: {'AVAILABLE' if can_analyze else 'BLOCKED (recording in progress)'}")
+    can_analyze = not rpi_usb_recorder_v2.is_actively_recording
+    if can_analyze:
+        print(f"  Analyzer: AVAILABLE")
+    else:
+        print(f"  Analyzer: BLOCKED (cycle in progress — CSV still being written)")
+
+    # Last completed cycle file (useful for the between-cycles workflow)
+    last_file = rpi_usb_recorder_v2.last_completed_cycle_file
+    if last_file:
+        print(f"  Last file: {last_file}")
 
 
 def main():
@@ -184,14 +226,17 @@ def main():
                 print("\n  [Recorder finished]")
                 recorder_done_event.clear()
 
-            rec_active = recorder_thread is not None and recorder_thread.is_alive()
-            analyzer_blocked = " (blocked - recording active)" if rec_active else ""
+            # Analyzer is blocked only while a cycle is mid-capture, NOT
+            # merely while the recorder thread is alive between cycles.
+            analyzer_blocked = rpi_usb_recorder_v2.is_actively_recording
 
             print(f"\n  ┌─────────────────────────────────┐")
             print(f"  │  1. Motor Control                │")
             print(f"  │  2. Start Recorder               │")
-            print(f"  │  3. Offline Analyzer{analyzer_blocked:13s}│" if not rec_active
-                  else f"  │  3. Offline Analyzer (blocked)   │")
+            if analyzer_blocked:
+                print(f"  │  3. Offline Analyzer (blocked)   │")
+            else:
+                print(f"  │  3. Offline Analyzer             │")
             print(f"  │  4. Status                       │")
             print(f"  │  5. Stop Motor                   │")
             print(f"  │  q. Quit                         │")

@@ -33,8 +33,8 @@ A complete data acquisition and signal processing pipeline for detecting and val
 | `esp32_usb_serial_safe_V2.ino` | ESP32 | Samples MPU6050 at 100 Hz, transmits via USB Serial |
 | `rpi_usb_recorder_v2.py` | RPI 4 | Receives UART data, validates, writes CSV files |
 | `motor_control.py` | RPI 4 | Controls DC motor via L298N driver (PWM on GPIO18) |
-| `offline_analyzer_exp.py` | PC/RPI 4 | Offline analyzer: bandpass per-axis, PSD, DPR, 7 figure tabs, no pass/fail |
-| `sys_manager.py` | RPI 4 | Orchestrates motor + recorder in parallel using threading |
+| `offline_analyzer_exp.py` | PC/RPI 4 | Offline analyzer: bandpass per-axis, PSD, DPR, 6 figure tabs, no pass/fail |
+| `sys_manager.py` | RPI 4 | Orchestrates motor (main thread) + recorder (daemon thread) + analyzer (subprocess) |
 
 ---
 
@@ -491,50 +491,77 @@ When running standalone (`python3 motor_control.py`), an interactive CLI allows 
 
 ### Stage 5: System Orchestration (`sys_manager.py`)
 
-The system manager coordinates motor control and data recording using Python threading.
+The system manager coordinates motor control, data recording, and offline analysis using a deliberate mix of concurrency mechanisms — one per component, picked on the basis of what each component actually needs.
 
 #### Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  sys_manager.py                  │
-│                                                  │
-│  Main Thread              Recorder Thread        │
-│  ────────────             ───────────────        │
-│  1. Init motor            record_data(port)      │
-│  2. Set duty cycle          │                    │
-│  3. Start recorder ─────→ while True:            │
-│     thread                    ser.readline()     │
-│  4. Accept motor              validate + write   │
-│     commands while            ...                │
-│     recording               ALL_COMPLETE         │
-│  5. done_event.wait() ◄─── done_event.set()     │
-│  6. motor.cleanup()                              │
-│  7. Launch analyzer                              │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         sys_manager.py                        │
+│                                                                │
+│  Main Thread (menu)        Recorder Thread       Subprocess    │
+│  ──────────────────        ────────────────      ──────────    │
+│  1. Init motor             record_data(port)                   │
+│  2. Set duty cycle           │                                 │
+│  3. Start recorder ──────→   ser.readline() loop               │
+│     thread                   reads CYCLE,1 events              │
+│  4. Menu keeps polling       writes tremor_cycleN.csv          │
+│     user input               sets is_actively_recording        │
+│  5. User picks "Analyze" ──→ flag read here ──→ Popen([       │
+│     (after cycle N done)                      "offline_       │
+│                                                analyzer.py"]) │
+│  6. Recorder keeps going on cycle N+1 in parallel             │
+│  7. ALL_COMPLETE → thread exits, done_event set               │
+│  8. motor.cleanup() on quit                                    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-#### Threading Model
+#### Concurrency model (three components, three mechanisms)
 
-- **Main thread**: sets motor speed, then enters a loop where it accepts motor commands (change Hz, stop, status) while monitoring the `done_event`
-- **Recorder thread** (daemon): runs `record_data(port)` which blocks in the UART read loop. When ESP32 sends `ALL_COMPLETE`, the function returns and signals `done_event`
-- **Motor PWM**: runs in hardware on GPIO18 — no thread needed. Once `set_duty_cycle()` is called, the PWM signal continues autonomously
+| Component | Runs on | Why this choice |
+|-----------|---------|-----------------|
+| Motor PWM | Kernel-side PWM thread owned by `RPi.GPIO` | Once `motor.set_duty_cycle()` is called, the pulse train is generated autonomously. The Python main thread does not need to loop or sleep to keep the motor spinning, so **no user-space thread is needed for the motor at all**. |
+| USB recorder | Background daemon `threading.Thread` running `record_data(port)` | The recorder is a tight `ser.readline()` loop — I/O-bound, blocked on the kernel read syscall. While blocked, the CPython **GIL is released**, so the menu thread keeps responding to keystrokes with zero contention. A thread (not a process) is preferred because the menu thread and the recorder thread share in-process state: the recorder updates `is_actively_recording` and `recording_finished`, and the menu reads those flags when drawing the UI and deciding whether the analyzer can be launched. Sharing a boolean across a process boundary would require `multiprocessing.Manager` or a pipe — a lot of plumbing for a flag. |
+| Offline analyzer | Separate OS process via `subprocess.Popen([sys.executable, "offline_analyzer_exp.py"])` | The analyzer owns its own **Tkinter `mainloop()`**, and Tk is not thread-safe: you cannot run two Tk root windows inside the same interpreter. A subprocess gives the analyzer its own Python interpreter, its own Tk root, its own matplotlib event loop, and its own crash domain — if matplotlib blows up on a malformed CSV, the recorder keeps collecting data. |
 
-#### Synchronization
+#### Why not `multiprocessing` for the recorder?
 
-A `threading.Event` object coordinates the two threads:
+`multiprocessing` is the right call when the child needs real CPU parallelism on multiple cores despite the GIL. The recorder does ~20 µs of Python work per sample at 100 Hz (≈0.2% of one core) and spends the rest of its life blocked on serial I/O — the GIL is simply not the bottleneck. Spawning a process would add fork/spawn overhead, force every shared-state update through a pipe or `Manager`, and break the trivial "recorder writes a flag, main thread reads it" pattern. `threading` is strictly cheaper here and is the canonical Python idiom for I/O-bound background work.
+
+#### Why not run the analyzer as another thread?
+
+Tk requires its `mainloop()` to run on the same thread that created the root window, and only one `mainloop()` per interpreter is supported. Embedding the analyzer in the same process also means any unhandled matplotlib/NumPy/Tk exception would take down the menu and the recorder with it. `subprocess.Popen` gives complete isolation for less code than a Tk-thread workaround.
+
+#### Synchronization primitives
 
 ```python
-done_event = threading.Event()
+# Module-level state (sys_manager.py)
+recorder_thread          = None
+recorder_done_event      = threading.Event()  # set() when ALL_COMPLETE
+recording_finished       = False              # True after at least one cycle done
 
-# Recorder thread (on finish):
-done_event.set()
-
-# Main thread (monitoring):
-done_event.wait(timeout=0.1)   # Non-blocking check
+# Module-level state (rpi_usb_recorder_v2.py)
+is_actively_recording    = False   # True only while samples are flowing
 ```
 
-When the recorder signals completion, the main thread exits its command loop, stops the motor, and optionally launches the offline analyzer.
+- `recorder_done_event` — used by the main thread to detect that the recorder has finished the whole session (`ALL_COMPLETE`) and clean up.
+- `is_actively_recording` — written by the recorder on `START_RECORDING`, `RESUME_CYCLE`, `PAUSE_CYCLE`, `END_RECORDING`. Read by `start_analyzer()` to decide whether the analyzer can be launched **right now** — i.e. whether we are between cycles (safe) or in the middle of one (blocked).
+
+#### Running the analyzer between cycles (not just at the end)
+
+Originally the analyzer was blocked as long as the recorder thread was alive — which meant you had to wait through all cycles before looking at cycle 1. That was too conservative: **between two cycles the recorder thread is alive but idle**, just polling for the next `START_RECORDING` from the ESP32 button, and the CSV file from the previous cycle has already been closed and flushed.
+
+The new logic uses `is_actively_recording` instead of `thread.is_alive()`:
+
+```python
+def start_analyzer():
+    if is_actively_recording:
+        print("  Recording cycle in progress — wait for END_RECORDING.")
+        return
+    subprocess.Popen([sys.executable, "offline_analyzer_exp.py"])
+```
+
+This lets the user open the analyzer on cycle 1 while cycle 2 is still ahead of them. If the user tries to launch it mid-cycle, the launch is rejected with a message.
 
 #### Execution Flow
 
@@ -542,32 +569,45 @@ When the recorder signals completion, the main thread exits its command loop, st
 $ python3 sys_manager.py
 
 [Step 1] Motor Setup
-  → User enters: "hz 5" (sets motor to ~5 Hz vibration)
-  → MotorController sets duty cycle, motor starts spinning
+  → User enters a duty cycle (e.g. 40%)
+  → MotorController sets PWM, motor starts spinning
 
 [Step 2] Serial Port
-  → Auto-detects /dev/ttyUSB0
+  → Auto-detects /dev/ttyUSB0 (or user-specified)
 
 [Step 3] Start Recorder Thread
-  → recorder_thread.start()
+  → recorder_thread.start() (daemon)
   → UART read loop begins in background
+  → is_actively_recording = False (waiting for ESP32 button press)
 
-[Step 4] Recording in Progress
-  → Main thread accepts commands: hz, stop, status
-  → Motor spins while recorder captures data
-  → ESP32 records for 120s per cycle
+[Step 4] Cycle 1 Recording
+  → ESP32 sends START_RECORDING on button press
+  → is_actively_recording = True
+  → Menu thread keeps accepting user input
+  → Motor spins while recorder writes tremor_cycle1_*.csv
+  → ESP32 records for 120s → END_RECORDING
+  → is_actively_recording = False
 
-[Step 5] Recording Complete
-  → ESP32 sends ALL_COMPLETE → done_event fires
-  → motor.cleanup() stops PWM and releases GPIO
+[Step 5] Between Cycles — Analyzer Available Here!
+  → Recorder thread is still alive (waiting for cycle 2)
+  → is_actively_recording = False → start_analyzer() allowed
+  → User picks option 3 → subprocess.Popen(offline_analyzer_exp.py)
+  → Analyzer opens in its own window, loads cycle 1 CSV
 
-[Step 6] Launch Offline Analyzer
-  → subprocess.Popen(["python3", "offline_analyzer_exp.py"])
+[Step 6] Cycle 2 Recording (parallel with open analyzer)
+  → User presses ESP32 button for cycle 2
+  → Recorder starts tremor_cycle2_*.csv
+  → Analyzer subprocess remains alive in its own process
+
+[Step 7] All Cycles Complete
+  → ESP32 sends ALL_COMPLETE → recorder thread exits → done_event.set()
+  → User can still launch a fresh analyzer instance on any cycle file
+  → motor.cleanup() on quit releases PWM/GPIO
 ```
 
 ### Stage 6: Offline Signal Processing (`offline_analyzer_exp.py`)
 
-The offline analyzer is a Tkinter GUI application that loads a recorded CSV file and performs the full signal processing chain. It reports all metrics as informational values (no pass/fail judgment), uses independent per-axis filtering, and produces 7 figure tabs for tremor characterization.
+The offline analyzer is a Tkinter GUI application that loads a recorded CSV file and performs the full signal processing chain. It reports all metrics as informational values (no pass/fail judgment), uses independent per-axis filtering, and produces 6 figure tabs for tremor characterization.
 
 #### Signal Processing Pipeline
 
@@ -723,31 +763,7 @@ df = Fs / N = 100 / 12000 = 0.00833 Hz
 
 **Why include FFT in addition to Welch PSD?** The Welch PSD averages over segments, which smooths the spectrum and reduces variance but limits frequency resolution to 0.25 Hz (with 4s segments). The full-recording FFT provides 120x finer resolution (0.0083 Hz), revealing fine spectral structure like exact motor frequency, harmonics, and narrow sidebands that Welch averaging would blur together. The trade-off is higher variance (no averaging), but for a clean motor signal the peak is prominent enough.
 
-**Note:** Only the one-sided spectrum (0 to Nyquist = 50 Hz) is computed using `np.fft.rfft` for real-valued input. The plot is zoomed to 0-12 Hz to show DC through the tremor band and its near harmonics.
-
-##### Step 9: Spectrogram — Time-Frequency Analysis (STFT)
-
-**What:** Compute a Short-Time Fourier Transform (STFT) spectrogram of the **raw dominant axis** (unfiltered) and display it as a heatmap showing how spectral content evolves over time.
-
-**Math:**
-
-```
-STFT{x[n]}(m, k) = SUM( x[n] * w[n - mR] * e^(-j*2*pi*k*n/L), n )
-Spectrogram(m, k) = |STFT(m, k)|^2    (power)
-```
-
-Where `w[n]` is a Hann window of length L, R is the hop size (L - overlap), and m is the time frame index.
-
-**Parameters:**
-
-```
-Window length:      256 samples (2.56 seconds)
-Overlap:            224 samples (87.5%)
-Frequency range:    0-12 Hz
-Color scale:        Power (dB)
-```
-
-**Why a spectrogram?** The PSD and FFT provide frequency information averaged over the entire recording. The spectrogram adds the time dimension, showing whether the dominant frequency is stable or drifting. For motor-driven vibration, the frequency should appear as a steady horizontal band. For real Parkinsonian tremor, the spectrogram would reveal intermittency (tremor appearing and disappearing) and frequency drift — clinically relevant characteristics that time-averaged methods cannot capture.
+**Note:** Only the one-sided spectrum (0 to Nyquist = 50 Hz) is computed using `np.fft.rfft` for real-valued input. The plot is zoomed to 0-12 Hz to show DC through the tremor band and its near harmonics. The y-axis is additionally clipped to 0-2 m/s², because for unfiltered data the DC bin is much larger than the tremor peak and would otherwise flatten everything in the tremor band when auto-scaled.
 
 ##### Step 8: Zoomed Time-Domain Analysis (Consecutive 5-Second Windows)
 
@@ -793,7 +809,7 @@ The envelope traces the instantaneous amplitude of the oscillation, showing ampl
 
 **Why two consecutive windows?** Comparing Window A and Window B (back-to-back) shows whether the tremor is stationary (stable frequency and amplitude) or non-stationary (drifting). For a motor-driven signal, both windows should show nearly identical cycle counts and envelope shapes. For real tremor, differences between windows may indicate tremor intermittency.
 
-#### Visualization (7 Figures)
+#### Visualization (6 Figures)
 
 **Figure 1 — Filter Characteristics (2 subplots):**
 - Fig 1.1: Bode Magnitude — filter gain vs frequency for single-pass and filtfilt
@@ -817,10 +833,7 @@ The envelope traces the instantaneous amplitude of the oscillation, showing ampl
 - Fig 5.2: Same as 4.2 but for the next consecutive 5 seconds
 
 **Figure 6 — FFT Analysis (single full-width plot):**
-- FFT magnitude of the raw (unfiltered) dominant axis, zoomed to 0-12 Hz, computed over the full 120s recording, with PWM reference line and peak annotation. Shows the full spectrum including out-of-band content
-
-**Figure 7 — Spectrogram (single full-width plot):**
-- STFT spectrogram of the raw (unfiltered) dominant axis, 0-12 Hz, showing time-frequency evolution across the full recording. Reveals whether the dominant frequency is stable or drifting over time
+- FFT magnitude of the raw (unfiltered) dominant axis, zoomed to 0-12 Hz, computed over the full 120s recording, with PWM reference line and peak annotation. Shows the full spectrum including out-of-band content. Y-axis is clipped to 0-2 m/s² so the tremor-band peaks remain visible above the DC bin, which would otherwise dominate the plot
 
 ---
 
@@ -900,6 +913,6 @@ Accel X,Y,Z  ──I2C──→ Read registers    ──→   ser.readline()   �
                        Subtract offsets         Write to CSV          Resultant from filtered
                        Stuck detection                                PSD per axis (Welch)
                        Format CSV line                                Dominant axis selection
-                       Serial.printf()  ──UART──→                    Metrics + FFT + Spectrogram
-                       (100 Hz, 115200 baud)                          7 Figure Tabs
+                       Serial.printf()  ──UART──→                    Metrics + FFT
+                       (100 Hz, 115200 baud)                          6 Figure Tabs
 ```

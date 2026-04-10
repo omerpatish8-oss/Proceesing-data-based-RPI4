@@ -171,7 +171,7 @@ IDLE ──[לחצן]──→ RECORDING ──[לחצן]──→ PAUSED ──
 - **כוח עיבוד**: FFT/PSD דורשים מעבד חזק - ESP32 לא מסוגל
 - **ספריות Python**: NumPy, SciPy, Matplotlib - מוכנות לשימוש
 - **ניהול קבצים**: CSV logging ל-SD card
-- **ממשק גרפי**: Tkinter GUI להצגת 7 תרשימי ניתוח
+- **ממשק גרפי**: Tkinter GUI להצגת 6 תרשימי ניתוח
 - **שליטה במנוע**: GPIO PWM לבקרת מנוע ה-DC
 
 ### תהליך העבודה (3 שלבים)
@@ -183,7 +183,7 @@ IDLE ──[לחצן]──→ RECORDING ──[לחצן]──→ PAUSED ──
    └─→ תפריט: מנוע | הקלטה | ניתוח
 
 3. ניתוח offline (offline_analyzer_exp.py)
-   └─→ טוען CSV → DSP → 7 תרשימים
+   └─→ טוען CSV → DSP → 6 תרשימים
 ```
 
 ---
@@ -350,11 +350,6 @@ L298N OUT2         → מנוע DC (-)
    ┌─────────────────────┐
    │ 4. FFT              │  ספקטרום גולמי (0-12Hz) על כל 120 שניות
    │    (על אות RAW)     │  → אישור התדר + זיהוי הרמוניות + תוכן מחוץ לפס
-   └──────────┬──────────┘
-              ▼
-   ┌─────────────────────┐
-   │ 5. Spectrogram      │  STFT על אות גולמי (0-12Hz)
-   │    (על אות RAW)     │  → יציבות התדר לאורך זמן
    └─────────────────────┘
 ```
 
@@ -402,11 +397,8 @@ L298N OUT2         → מנוע DC (-)
 ### Fig 6 - FFT על אות גולמי (0-12Hz)
 - FFT על הציר הדומיננטי **ללא סינון** - מראה את כל הספקטרום כולל תוכן מחוץ לפס המסנן
 - אפשר לראות DC, הרמוניות, ורעש שהמסנן מסיר
-
-### Fig 7 - Spectrogram (STFT) על אות גולמי (0-12Hz)
-- מפת חום זמן-תדר של הציר הדומיננטי הגולמי
-- מראה אם התדר יציב לאורך כל 120 השניות
-- רלוונטי קלינית: רעד פרקינסוני הוא intermittent, רעד מנוע צריך להיות אחיד
+- ציר Y חתוך ל-0-2 m/s² כדי שהפיקים ברעד יהיו גלויים מעל בליטת ה-DC
+- (*הערה:* Fig 7 Spectrogram נמחק — עבור בדיקת מנוע של 2 דקות, ה-FFT הכולל + חלונות 5 שניות כבר מכסים את השאלה "האם התדר יציב לאורך הזמן")
 
 ---
 
@@ -470,15 +462,25 @@ a(f) = F / M_total = 0.0236·f² / 0.65 = 0.04·f²  [m/s²]
 ### מערכת העיבוד (RPi)
 ```
 [sys_manager.py] → תפריט
-    ├── 1. מנוע → קביעת DC% → PWM
-    ├── 2. הקלטה → thread → USB Serial → CSV
-    ├── 3. ניתוח → offline_analyzer_exp.py
+    ├── 1. מנוע → קביעת DC% → PWM (kernel-side, אין thread)
+    ├── 2. הקלטה → daemon thread → USB Serial → CSV
+    ├── 3. ניתוח → subprocess.Popen(offline_analyzer_exp.py)
     │              └→ Load CSV → Bandpass 2-8Hz per axis
     │                 → Resultant from filtered → PSD per axis
     │                 → Dominant axis → Metrics + FFT → 6 Figure Tabs
     ├── 4. סטטוס
     └── q. יציאה
 ```
+
+### מודל הרצה מקבילית (Concurrency) — למה שלושה מנגנונים שונים?
+
+| רכיב | מנגנון | למה דווקא זה |
+|------|---------|---------------|
+| **PWM למנוע** | Thread של kernel בתוך `RPi.GPIO` | אחרי `set_duty_cycle()` ה-PWM מתחזק אוטומטית — אין צורך ב-thread ב-Python |
+| **הקלטה (USB)** | `threading.Thread` (daemon) | הקוד חסום על `ser.readline()` (I/O-bound) → משחרר את ה-GIL → התפריט ב-main thread ממשיך להגיב. `Thread` מעדיף על `multiprocessing` כי הוא צריך לקרוא ולכתוב משתני מצב משותפים (`is_actively_recording`) — זולים דרך זיכרון משותף, יקרים דרך pipe |
+| **Analyzer (GUI)** | `subprocess.Popen([sys.executable, "offline_analyzer_exp.py"])` | Tkinter לא תומך בשני `mainloop()` באותו interpreter. subprocess נותן לו interpreter משלו, Tk root משלו, ומגן מה-menu מקריסות ב-matplotlib |
+
+**החלטה מפתח**: ניתן עכשיו להריץ את ה-analyzer **בין מחזורי הקלטה** (לא רק בסוף). ה-recorder מעדכן דגל `is_actively_recording` בכל `START_RECORDING`/`PAUSE_CYCLE`/`RESUME_CYCLE`/`END_RECORDING`. התפריט מרשה להפעיל analyzer כאשר הדגל False, כלומר: הסבב הקודם כבר נסגר, ה-CSV כבר נכתב, וה-ESP32 מחכה לכפתור לסבב הבא.
 
 ---
 

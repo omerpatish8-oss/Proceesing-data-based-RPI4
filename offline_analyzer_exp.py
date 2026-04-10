@@ -15,15 +15,13 @@ Based on offline_analyzer.py with the following changes:
   - Fig 5: Zoomed filtered signal for the next consecutive 5-second window
     (second half of the same 10-second block, directly after Fig 4).
   - Fig 6: FFT magnitude of the raw (unfiltered) dominant axis (0-12 Hz)
-    over the full 120-second recording.
-  - Fig 7: STFT Spectrogram of the raw dominant axis (0-12 Hz) showing
-    time-frequency evolution across the full recording.
+    over the full 120-second recording, y-axis clipped to 0-2 m/s^2.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import numpy as np
-from scipy.signal import butter, filtfilt, welch, hilbert, freqz, spectrogram
+from scipy.signal import butter, filtfilt, welch, hilbert, freqz
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.gridspec import GridSpec
@@ -260,24 +258,6 @@ class TremorAnalyzerExperimental:
         self.figures.append(self.fig6)
         self.canvases.append(canvas6)
         self.all_axes.extend([self.ax_fft_zoom])
-
-        # ==================== FIGURE 7: SPECTROGRAM (STFT) ====================
-        fig7_frame = ttk.Frame(self.notebook)
-        self.notebook.add(fig7_frame, text="Figure 7 - Spectrogram")
-
-        self.fig7 = plt.figure(figsize=(15, 4))
-        gs7 = GridSpec(1, 1, figure=self.fig7)
-
-        self.ax_spectrogram = self.fig7.add_subplot(gs7[0, 0])
-
-        canvas7 = FigureCanvasTkAgg(self.fig7, master=fig7_frame)
-        canvas7.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        toolbar7 = NavigationToolbar2Tk(canvas7, fig7_frame)
-        toolbar7.update()
-
-        self.figures.append(self.fig7)
-        self.canvases.append(canvas7)
-        self.all_axes.extend([self.ax_spectrogram])
 
         # Initialize plots
         self.clear_all_plots()
@@ -713,11 +693,6 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         # ============================================================
         self._plot_fft_full(metrics)
 
-        # ============================================================
-        # FIGURE 7: SPECTROGRAM (STFT) OF RAW DOMINANT AXIS
-        # ============================================================
-        self._plot_spectrogram(t, metrics)
-
         # Draw all canvases
         for canvas in self.canvases:
             canvas.draw()
@@ -886,70 +861,6 @@ Filter:              2-8 Hz (Butterworth O4, filtfilt)
         self.ax_fft_zoom.set_ylim(0, 2)
         self.ax_fft_zoom.grid(True, alpha=0.3)
         self.ax_fft_zoom.legend(fontsize=7)
-
-
-    # ------------------------------------------------------------------
-    # Helper: Spectrogram (STFT) of raw dominant axis
-    # ------------------------------------------------------------------
-    def _plot_spectrogram(self, t, metrics):
-        """Compute and plot STFT spectrogram of the raw (unfiltered) dominant axis.
-
-        Shows time-frequency evolution across the full recording (0-12 Hz).
-        Reveals whether the dominant frequency is stable or drifting over time.
-        """
-        raw_signal = self._dominant_axis_raw
-        dom_ax = self._dominant_axis_name
-
-        # STFT parameters
-        nperseg_spec = 256      # 2.56 seconds window
-        noverlap_spec = 224     # 87.5% overlap for smooth time resolution
-
-        f_spec, t_spec, Sxx = spectrogram(
-            raw_signal, fs=FS,
-            nperseg=nperseg_spec,
-            noverlap=noverlap_spec,
-            window='hann'
-        )
-
-        # Offset t_spec to match recording time axis
-        if len(t) > 0:
-            t_spec = t_spec + t[0]
-
-        # Convert to dB scale
-        Sxx_db = 10 * np.log10(Sxx + 1e-12)
-
-        # Mask to 0-12 Hz
-        freq_mask = f_spec <= 12.0
-
-        self.ax_spectrogram.clear()
-        im = self.ax_spectrogram.pcolormesh(
-            t_spec, f_spec[freq_mask], Sxx_db[freq_mask, :],
-            shading='gouraud', cmap='inferno'
-        )
-
-        # PWM reference line
-        pwm_freq = metrics['pwm_freq']
-        self.ax_spectrogram.axhline(pwm_freq, color='cyan', linestyle='--',
-                                    linewidth=1.5, alpha=0.8,
-                                    label=f'PWM Freq: {pwm_freq:.1f} Hz')
-
-        # Tremor band boundaries
-        self.ax_spectrogram.axhline(FREQ_REST_LOW, color='white', linestyle=':',
-                                    linewidth=0.8, alpha=0.5)
-        self.ax_spectrogram.axhline(FREQ_REST_HIGH, color='white', linestyle=':',
-                                    linewidth=0.8, alpha=0.5)
-
-        self.ax_spectrogram.set_title(
-            f'Fig 7 - Spectrogram Raw Dominant Axis {dom_ax} (0-12 Hz)',
-            fontweight='bold')
-        self.ax_spectrogram.set_xlabel('Time (s)')
-        self.ax_spectrogram.set_ylabel('Frequency (Hz)')
-        self.ax_spectrogram.set_ylim(0, 12)
-        self.ax_spectrogram.legend(fontsize=7, loc='upper right')
-
-        # Colorbar
-        cb = self.fig7.colorbar(im, ax=self.ax_spectrogram, pad=0.01)
-        cb.set_label('Power (dB)', fontsize=8)
 
 
 if __name__ == "__main__":

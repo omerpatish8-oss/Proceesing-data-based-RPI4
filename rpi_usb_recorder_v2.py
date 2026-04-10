@@ -23,6 +23,18 @@ OUTPUT_FOLDER = 'tremor_data'
 CONNECTION_TIMEOUT = 5.0  # Seconds - alert if no data received
 EXPECTED_COLUMNS = 4      # Timestamp,Ax,Ay,Az
 
+# ─────────────────────────────────────────────────────────────
+# Module-level state shared with sys_manager.py
+# ─────────────────────────────────────────────────────────────
+# True only while samples are actively flowing from the ESP32 (between
+# START_RECORDING/RESUME_CYCLE and the matching PAUSE_CYCLE/END_RECORDING).
+# sys_manager.start_analyzer() reads this flag to decide whether the analyzer
+# can be launched — it must NOT be launched while a cycle is mid-capture
+# (the CSV is still being written), but it IS safe between cycles.
+is_actively_recording = False
+# Path of the most recently completed cycle CSV (for display / convenience).
+last_completed_cycle_file = None
+
 def create_output_folder():
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
@@ -90,8 +102,10 @@ def safe_serial_open(port, baud, timeout=2):
         return None
 
 def record_data(port):
+    global is_actively_recording, last_completed_cycle_file
+
     print(f"\n📡 Connecting to {port}...")
-    
+
     ser = safe_serial_open(port, BAUD_RATE)
     if not ser:
         return False
@@ -154,6 +168,7 @@ def record_data(port):
                     recording = True
                     paused = False
                     data_count = 0
+                    is_actively_recording = True
                     continue
                 
                 # ═══════════════════════════════════
@@ -281,6 +296,7 @@ def record_data(port):
                 # ═══════════════════════════════════
                 if "PAUSE_CYCLE" in line:
                     paused = True
+                    is_actively_recording = False
                     print(f"\n⏸️  PAUSED ({data_count} samples so far)")
                     print(f"   File stays open: {csv_filename}\n")
                     if log_file:
@@ -292,6 +308,7 @@ def record_data(port):
                 # ═══════════════════════════════════
                 if "RESUME_CYCLE" in line:
                     paused = False
+                    is_actively_recording = True
                     print(f"\n▶️  RESUMED")
                     print(f"   Continuing to: {csv_filename}\n")
                     if log_file:
@@ -304,6 +321,7 @@ def record_data(port):
                 # ═══════════════════════════════════
                 if "END_RECORDING" in line:
                     recording = False
+                    is_actively_recording = False
                     if csv_file:
                         # Update final metadata
                         cycle_metadata['errors'] = error_count
@@ -321,6 +339,7 @@ def record_data(port):
                             log_file = None
 
                         csv_file.close()
+                        last_completed_cycle_file = csv_filename
                         print(f"\n✅ Cycle {current_cycle} Complete!")
                         print(f"   Total samples: {data_count}")
                         print(f"   Duration: {last_timestamp/1000:.1f}s")
@@ -329,6 +348,7 @@ def record_data(port):
                         print(f"   Validation errors: {validation_errors}")
                         print(f"   CSV: {csv_filename}")
                         print(f"   Log: {log_filename}")
+                        print(f"   ▶ Analyzer can now be launched on this file")
                         print("="*60 + "\n")
                         csv_file = None
                         csv_filename = None
@@ -384,6 +404,7 @@ def record_data(port):
         print("\n\n⏹️  Stopped by user")
     
     finally:
+        is_actively_recording = False
         if csv_file:
             csv_file.close()
             print(f"\n💾 Final save: {csv_filename}")
