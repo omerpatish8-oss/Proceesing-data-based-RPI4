@@ -31,7 +31,9 @@ IN1_PIN = 23  # Direction control 1
 IN2_PIN = 24  # Direction control 2
 
 # PWM Configuration
-PWM_FREQUENCY = 1000  # 1 kHz carrier frequency (not motor speed!)
+PWM_FREQUENCY = 100   # 100 Hz — reliable range for RPi.GPIO software PWM on RPi4
+                      # (1 kHz was too fast: software PWM needs ~0.5ms toggle but Linux
+                      #  scheduling jitter is 1-10ms, producing a distorted/absent signal)
 
 # Motor Specifications (12V DC Gearbox Motor with eccentric mass)
 MAX_RPM = 625           # Maximum RPM at 12V (100% duty cycle)
