@@ -65,7 +65,7 @@ class MotorController:
         self.current_duty_cycle = 0
 
         GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+        GPIO.setwarnings(True)   # temporary: show all GPIO warnings to diagnose motor issue
 
         GPIO.setup(ENA_PIN, GPIO.OUT)
         GPIO.setup(IN1_PIN, GPIO.OUT)
