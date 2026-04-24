@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-System Manager - Orchestrates motor control, data recording, and offline analysis.
+System Manager — Top-level orchestrator for the Parkinson's tremor detection system.
+Coordinates three independent components: motor PWM (main thread via RPi.GPIO),
+USB recorder (background daemon thread), and offline analyzer (separate subprocess).
+Provides a numbered menu interface for motor control, recording, and analysis launch.
+Uses the is_actively_recording flag from rpi_usb_recorder_v2 to allow analyzer launch
+between cycles (not only after ALL cycles are complete), preventing mid-capture interference.
 
 Concurrency model (three components, three mechanisms):
   - Motor PWM: kernel-side PWM thread inside RPi.GPIO. No user-space thread
@@ -47,6 +52,9 @@ recorder_thread = None
 recording_finished = False  # True after recorder completes at least once
 
 
+# ── Thread target that wraps record_data() and signals completion ────
+# Calls record_data(port) to run the full UART read loop; sets recording_finished
+# and fires recorder_done_event when the session ends (ALL_COMPLETE or error).
 def run_recorder(port):
     """Recorder thread: runs UART read loop until ESP32 signals ALL_COMPLETE."""
     global recording_finished
@@ -59,6 +67,9 @@ def run_recorder(port):
         recorder_done_event.set()
 
 
+# ── Interactive handler for starting or adjusting the motor ─────────
+# Initializes MotorController on first call; on subsequent calls lets the user
+# change the duty cycle on the already-running motor or go back to the menu.
 def start_motor():
     """Option 1: Start motor with user-specified duty cycle."""
     global motor
@@ -104,6 +115,9 @@ def start_motor():
             print("  Invalid input. Enter a number 0-100.")
 
 
+# ── Spawn the USB recorder as a background daemon thread ────────────
+# Finds the serial port, creates the output folder, and starts run_recorder()
+# in a daemon thread so it survives menu interaction but exits with the process.
 def start_recorder():
     """Option 2: Start the USB recorder in a background thread."""
     global recorder_thread
@@ -138,6 +152,9 @@ def start_recorder():
     print("  You can now return to the menu and use other options.\n")
 
 
+# ── Launch the offline analyzer as an isolated subprocess ───────────
+# Blocked while is_actively_recording is True (CSV is mid-write); otherwise
+# opens offline_analyzer_exp.py in its own interpreter so Tk can run safely.
 def start_analyzer():
     """Option 3: Launch offline analyzer.
 
@@ -165,6 +182,8 @@ def start_analyzer():
     print("  Analyzer launched (in its own subprocess).")
 
 
+# ── Stop the motor and release all GPIO resources ───────────────────
+# Calls motor.cleanup() (stops PWM + GPIO) and sets motor to None.
 def stop_motor():
     """Stop and cleanup the motor."""
     global motor
@@ -176,6 +195,9 @@ def stop_motor():
     print("\n  Motor stopped and GPIO released.")
 
 
+# ── Print current state of motor, recorder, and analyzer ────────────
+# Reads is_actively_recording and recording_finished flags to report
+# whether each component is OFF / IDLE / RECORDING / FINISHED / AVAILABLE.
 def show_status():
     """Show current system status."""
     print("\n  ── System Status ──")
@@ -211,6 +233,9 @@ def show_status():
         print(f"  Last file: {last_file}")
 
 
+# ── Main entry point: menu loop with graceful shutdown ──────────────
+# Prints the numbered menu, dispatches user input to each handler function,
+# and cleans up motor and recorder thread on quit or KeyboardInterrupt.
 def main():
     global motor
 

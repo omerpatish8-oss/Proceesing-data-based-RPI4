@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
 L298N Motor Driver Control for Raspberry Pi 4
-
-Single mode: Duty Cycle Control
-  - Set duty cycle -> motor runs at that speed
-  - Change duty cycle anytime during operation
-  - Motor keeps running until you stop it or quit
+Controls a 12V DC gearbox motor with an eccentric mass to simulate Parkinson's rest tremor.
+Translates user-supplied duty cycle (0-100%) into PWM on GPIO18 via the L298N H-bridge driver.
+The motor rotation speed maps linearly to vibration frequency (2-10 Hz tremor simulation range).
+Provides a class-based API (MotorController) and a standalone interactive CLI for manual testing.
 
   Duty Cycle -> Average Voltage -> RPM (linear approximation):
     20% -> 2.4V  -> ~125 RPM  -> ~2.1 Hz
@@ -40,6 +39,8 @@ ECCENTRIC_MASS_G = 40   # Eccentric mass in grams
 MIN_DUTY_CYCLE = 15     # Minimum duty cycle for motor to start spinning
 
 
+# ── Convert duty cycle to RPM and vibration frequency ───────────────
+# Uses the linear motor model: RPM = (duty% / 100) * MAX_RPM.
 def duty_cycle_to_rpm(duty_cycle):
     """Convert duty cycle (0-100%) to RPM and Hz"""
     rpm = (duty_cycle / 100.0) * MAX_RPM
@@ -47,6 +48,8 @@ def duty_cycle_to_rpm(duty_cycle):
     return rpm, hz
 
 
+# ── Convert a target vibration frequency (Hz) to required duty cycle ─
+# Inverse of duty_cycle_to_rpm; clamps output if target_hz exceeds motor maximum.
 def hz_to_duty_cycle(target_hz):
     """Convert target Hz to required duty cycle (0-100%)"""
     if target_hz <= 0:
@@ -60,6 +63,8 @@ def hz_to_duty_cycle(target_hz):
 class MotorController:
     """L298N Motor Driver - duty cycle controls speed"""
 
+    # ── Initialize GPIO pins and software PWM at 1 kHz ──────────────
+    # Sets up ENA (PWM), IN1, IN2 pins and starts PWM at 0% duty cycle with the motor stopped.
     def __init__(self):
         self.pwm = None
         self.current_duty_cycle = 0
@@ -82,6 +87,8 @@ class MotorController:
         print(f"Motor initialized (GPIO{ENA_PIN}, carrier {PWM_FREQUENCY} Hz)")
         print(f"Motor max: {MAX_RPM} RPM ({MAX_HZ:.1f} Hz)")
 
+    # ── Apply a new duty cycle (0-100%) to the PWM output ───────────
+    # Clamps the value to valid range and calls ChangeDutyCycle; direction is unchanged.
     def set_duty_cycle(self, duty_cycle):
         """Set duty cycle (0-100%). Direction must be set separately."""
         duty_cycle = max(0, min(100, duty_cycle))
@@ -89,17 +96,23 @@ class MotorController:
         if self.pwm:
             self.pwm.ChangeDutyCycle(duty_cycle)
 
+    # ── Configure L298N direction pins for forward rotation ─────────
+    # Sets IN1=HIGH, IN2=LOW; must be called before set_duty_cycle() to spin the motor.
     def start_forward(self):
         """Set direction to forward"""
         GPIO.output(IN1_PIN, GPIO.HIGH)
         GPIO.output(IN2_PIN, GPIO.LOW)
 
+    # ── Bring the motor to a complete stop (duty=0, IN1/IN2 both LOW) ─
+    # Does not release GPIO; use cleanup() when fully done with the motor.
     def stop(self):
         """Stop motor"""
         GPIO.output(IN1_PIN, GPIO.LOW)
         GPIO.output(IN2_PIN, GPIO.LOW)
         self.set_duty_cycle(0)
 
+    # ── Stop the motor and release all GPIO resources ────────────────
+    # Stops PWM, calls GPIO.cleanup() on only the motor pins, and prints confirmation.
     def cleanup(self):
         """Stop motor and release GPIO"""
         self.stop()
@@ -109,6 +122,9 @@ class MotorController:
         print("Motor cleanup done")
 
 
+# ── Standalone interactive CLI for manual motor testing ─────────────
+# Prints the duty-to-Hz table, initializes MotorController, and enters an
+# input loop accepting duty cycle percentages or 'hz <value>' commands.
 def main():
     """
     Duty Cycle Control

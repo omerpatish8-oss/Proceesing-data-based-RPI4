@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-ESP32 USB Serial Recorder v3
-Improvements:
-- ESP32 error event handling (sensor stuck, resets, connection loss)
-- Error logging per cycle
-- Connection timeout detection
-- Data validation (4 columns)
-- Metadata tracking (sensor resets, data quality)
+ESP32 USB Serial Recorder — Receives and saves accelerometer data from the ESP32.
+Listens on the USB serial port, parses the ESP32 event protocol, and writes per-cycle
+CSV files (with metadata headers) and matching .log files for error and event tracking.
+Validates every incoming data line (4 columns, numeric types) before writing to disk.
+Exposes the module-level `is_actively_recording` flag so sys_manager.py can determine
+whether a cycle is mid-capture and block the offline analyzer accordingly.
 """
 
 import serial
@@ -35,11 +34,18 @@ is_actively_recording = False
 # Path of the most recently completed cycle CSV (for display / convenience).
 last_completed_cycle_file = None
 
+
+# ── Create the tremor_data/ output directory if it does not exist ───
+# Called once before recording starts to ensure the CSV destination is ready.
 def create_output_folder():
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
         print(f"📁 Created folder: {OUTPUT_FOLDER}/")
 
+
+# ── Write a timestamped event entry to the per-cycle .log file ──────
+# Provides a persistent audit trail of all ESP32 events, errors, and state changes
+# throughout the recording session; flushes immediately so nothing is lost on crash.
 def log_event(log_file, event_type, message):
     """Log events to error/event log file"""
     if log_file:
@@ -47,6 +53,10 @@ def log_event(log_file, event_type, message):
         log_file.write(f"[{timestamp}] {event_type}: {message}\n")
         log_file.flush()
 
+
+# ── Validate that a CSV data line has correct format and types ───────
+# Checks for exactly 4 comma-separated columns: non-negative integer timestamp
+# followed by three numeric floats (Ax, Ay, Az); returns (True, None) or (False, reason).
 def validate_data_line(line):
     """Validate CSV data line format (4 columns expected)"""
     try:
@@ -69,22 +79,29 @@ def validate_data_line(line):
     except Exception as e:
         return False, f"Validation error: {e}"
 
+
+# ── Scan available serial ports and return the best candidate ────────
+# Auto-selects if only one port is found; defaults to /dev/ttyUSB0 otherwise.
 def find_port():
     ports = list(serial.tools.list_ports.comports())
     if not ports:
         print("❌ No serial ports found!")
         return None
-    
+
     print("\n📍 Available ports:")
     for i, port in enumerate(ports, 1):
         print(f"   {i}. {port.device} - {port.description}")
-    
+
     if len(ports) == 1:
         print(f"\n✅ Auto-selected: {ports[0].device}")
         return ports[0].device
-    
+
     return DEFAULT_PORT
 
+
+# ── Open the serial port with a 2-second read timeout ───────────────
+# Clears input/output buffers after opening; returns a Serial object or
+# None on failure, with a hint for resolving permission errors.
 def safe_serial_open(port, baud, timeout=2):
     try:
         ser = serial.Serial(
@@ -101,6 +118,11 @@ def safe_serial_open(port, baud, timeout=2):
         print("💡 Try: sudo chmod 666 " + port)
         return None
 
+
+# ── Main recording loop: parse ESP32 event stream and write CSV/log files ─
+# Opens the serial port, reads lines, dispatches on control tokens
+# (START_RECORDING, CYCLE,N, PAUSE_CYCLE, RESUME_CYCLE, END_RECORDING, errors),
+# and writes validated data samples to per-cycle CSV files; updates is_actively_recording.
 def record_data(port):
     global is_actively_recording, last_completed_cycle_file
 
@@ -109,11 +131,11 @@ def record_data(port):
     ser = safe_serial_open(port, BAUD_RATE)
     if not ser:
         return False
-    
+
     print("✅ Connected!")
     print("\n🎬 Waiting for ESP32 to start recording...")
     print("="*60)
-    
+
     recording = False
     paused = False
     current_cycle = 0  # Track current cycle number
@@ -137,7 +159,7 @@ def record_data(port):
         'errors': 0,
         'validation_errors': 0
     }
-    
+
     try:
         while True:
             # Connection timeout detection
@@ -153,14 +175,14 @@ def record_data(port):
 
             if ser.in_waiting > 0:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
-                
+
                 if not line:
                     continue
-                
+
                 # Print non-data lines
                 if not (line[0].isdigit() and ',' in line):
                     print(line)
-                
+
                 # ═══════════════════════════════════
                 # Start recording
                 # ═══════════════════════════════════
@@ -170,7 +192,7 @@ def record_data(port):
                     data_count = 0
                     is_actively_recording = True
                     continue
-                
+
                 # ═══════════════════════════════════
                 # New cycle detection (FIXED!)
                 # ═══════════════════════════════════
@@ -179,7 +201,7 @@ def record_data(port):
                         cycle_num = int(line.split(',')[1])
                     except:
                         cycle_num = current_cycle + 1
-                    
+
                     # Only create NEW file if cycle number changed!
                     if cycle_num != current_cycle:
                         current_cycle = cycle_num
@@ -315,7 +337,7 @@ def record_data(port):
                         log_event(log_file, "INFO", f"Recording resumed at {data_count} samples")
                     last_data_time = time.time()  # Reset timeout counter
                     continue
-                
+
                 # ═══════════════════════════════════
                 # End recording (now close file)
                 # ═══════════════════════════════════
@@ -354,14 +376,14 @@ def record_data(port):
                         csv_filename = None
                         log_filename = None
                     continue
-                
+
                 # ═══════════════════════════════════
                 # All done
                 # ═══════════════════════════════════
                 if "ALL_COMPLETE" in line:
                     print("\n🎉 All cycles complete!")
                     break
-                
+
                 # ═══════════════════════════════════
                 # Save data (even during pause/resume!)
                 # ═══════════════════════════════════
@@ -399,10 +421,10 @@ def record_data(port):
                             print(f"   📊 {data_count:5d} samples | {last_timestamp/1000:6.1f}s")
             else:
                 time.sleep(0.01)
-    
+
     except KeyboardInterrupt:
         print("\n\n⏹️  Stopped by user")
-    
+
     finally:
         is_actively_recording = False
         if csv_file:
@@ -415,24 +437,27 @@ def record_data(port):
         if ser and ser.is_open:
             ser.close()
         print("✅ Connection closed")
-    
+
     return True
 
+
+# ── CLI entry point for running the recorder standalone ─────────────
+# Detects or accepts the serial port from argv and calls record_data().
 def main():
     print("\n╔════════════════════════════════════╗")
     print("║ ESP32 USB Recorder v3              ║")
     print("║ + Error handling & validation     ║")
     print("╚════════════════════════════════════╝")
-    
+
     create_output_folder()
-    
+
     if len(sys.argv) > 1:
         port = sys.argv[1]
     else:
         port = find_port()
         if not port:
             port = DEFAULT_PORT
-    
+
     print(f"\n📍 Using port: {port}")
     record_data(port)
 
