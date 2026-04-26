@@ -363,7 +363,6 @@ def record_data(port):
                         csv_file.close()
                         last_completed_cycle_file = csv_filename
                         print(f"\n✅ Cycle {current_cycle} Complete!")
-                        print(f"   Total samples: {data_count}")
                         print(f"   Duration: {last_timestamp/1000:.1f}s")
                         print(f"   Sensor resets: {sensor_resets}")
                         print(f"   Errors: {error_count}")
